@@ -6,7 +6,7 @@ from ..checkpoints.decorator import (
     warning_message,
 )
 
-HUGGINGFACE_HUB_ROOT_PREFIX = "mf.huggingface_hub_0"
+HUGGINGFACE_HUB_ROOT_PREFIX = "mf.huggingface_hub"
 
 
 def download_model_from_huggingface(**kwargs):
@@ -97,6 +97,7 @@ class HuggingfaceHubDecorator(CheckpointDecorator):
         self._flow_datastore = flow_datastore
         self._logger = logger
         self._chkptr = None
+        self._collector_thread = None
         self._registry = HuggingfaceRegistry(logger)
 
     def _resolve_settings(self):

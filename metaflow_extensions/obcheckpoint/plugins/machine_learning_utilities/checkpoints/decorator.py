@@ -2,7 +2,7 @@
 from datetime import datetime
 import os
 
-from ..exceptions import TODOException
+from .exceptions import CheckpointException
 from ..utils import flowspec_utils
 from ..card_utils import CardDecoratorInjector, AsyncPeriodicRefresher
 from .cards.checkpoint_lister import CheckpointListRefresher, CheckpointsCollector
@@ -330,8 +330,8 @@ class CheckpointDecorator(StepDecorator, CardDecoratorInjector):
             self.attributes["load_policy"] is not None
             and self.attributes["load_policy"] not in self.LOAD_POLCIES
         ):
-            raise TODOException(
-                "Load Policy %s is not supported. Supported policies are %s"
+            raise CheckpointException(
+                "`load_policy` of %s is not supported. Supported policies are %s"
                 % (self.attributes["load_policy"], ", ".join(self.LOAD_POLCIES))
             )
 

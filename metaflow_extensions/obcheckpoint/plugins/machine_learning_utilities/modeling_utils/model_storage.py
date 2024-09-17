@@ -8,9 +8,7 @@ from ..exceptions import KeyNotCompatibleWithObjectException
 from datetime import datetime
 import re
 
-MODELS_PEFFIX = (
-    "mf.models_002"  # TODO [FIX-ME-BEFORE-RELEASE]: Change this to "mf.models"
-)
+MODELS_PEFFIX = "mf.models"
 
 
 ARTIFACT_STORE_NAME = "artifacts"

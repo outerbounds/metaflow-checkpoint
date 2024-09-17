@@ -3,8 +3,9 @@ import tempfile
 from typing import Dict, List, Optional, Tuple, Union
 
 
-from ..exceptions import TODOException, KeyNotFoundError
+from ..exceptions import KeyNotFoundError
 from .model_storage import ModelDatastore
+from .exceptions import LoadingException
 from ..datastore.utils import safe_serialize
 from ..utils.general import get_path_size, unit_convert, warning_message
 from ..utils.identity_utils import MAX_HASH_LEN
@@ -97,9 +98,7 @@ class LoadedModels:
         for artifact_name, path in _art_refs:
             artifact = getattr(flow, artifact_name, None)
             if artifact is None:
-                raise TODOException(
-                    f"Artifact {artifact_name} not found in flow {flow}"
-                )
+                raise LoadingException(f"Artifact {artifact_name} not found in flow")
             if (
                 type(artifact) == str
             ):  # If its a string then it means its a key reference
@@ -112,7 +111,7 @@ class LoadedModels:
             ):
                 _hydrated_artifact = Factory.hydrate(artifact)
             else:
-                raise TODOException(
+                raise LoadingException(
                     f"Artifact {artifact_name} is not a valid artifact reference"
                 )
             _hydrated_artifacts.append((_hydrated_artifact, artifact_name, path))
@@ -156,8 +155,8 @@ class LoadedModels:
                     self._temp_directories[artifact_name].cleanup()
 
                 self._loaded_models[artifact_name] = None
-            raise TODOException(
-                f"Artifact References specified in {artifact_name} not found in the datastore"
+            raise LoadingException(
+                f"Artifact reference specified in {artifact_name} not found in the datastore"
             )
 
     def __getitem__(self, key):
@@ -251,13 +250,13 @@ class ModelSerializer:
 
     def load(
         self,
-        reference: Optional[Union[str, MetaflowDataArtifactReference, dict]] = None,
+        reference: Union[str, MetaflowDataArtifactReference, dict],
         path: Optional[str] = None,
-        model_id: Optional[str] = None,
     ):
-        if all([reference is None, model_id is None]):
+
+        if reference is None:
             raise ValueError(
-                "`current.model.load` requires least one of the following: reference, model_id"
+                "reference arguement to `current.model.load` cannot be None"
             )
         if path is None:
             raise ValueError("`current.model.load` requires a path to load the model")
@@ -273,8 +272,7 @@ class ModelSerializer:
                 )
             elif type(reference) == str:
                 Factory.load_from_key(reference, path, self._storage_backend)
-        elif model_id is not None:
-            raise TODOException("TODO: Implement loading from reference string")
+        # TODO [POST-RELEASE] : Implement the model_id loading
 
 
 def _load_model(

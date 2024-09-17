@@ -5,14 +5,11 @@ import os
 
 
 from metaflow import current
+from metaflow.exception import MetaflowException
 from typing import List, Union, Optional, TYPE_CHECKING
 import os
-
-from ..exceptions import (
-    TODOException,
-)
+from .exceptions import CheckpointNotAvailableException, CheckpointException
 from ..utils import flowspec_utils
-from . import task_utils
 from .checkpoint_storage import CheckpointDatastore
 from ..datastructures import CheckpointArtifact
 from ..datastore.task_utils import (
@@ -134,9 +131,7 @@ class Checkpointer:
         key, pathspec = None, None
         _chckpt: CheckpointArtifact = CheckpointArtifact.hydrate(checkpoint)
         key, pathspec = _chckpt.key, _chckpt.pathspec
-        if not (key and pathspec):
-            raise TODOException("TODO: Suport out of task checkpoints")
-
+        # TODO [POST-RELEASE]: Suport out of task checkpoints
         datastore = ReadResolver.from_key_and_pathspec(pathspec, key)
         obj = cls(
             datastore=datastore,
@@ -228,7 +223,7 @@ class ScopeResolver:
 
         ns = get_namespace()
         if ns is None:
-            raise ValueError("TODO: set error when no namespace is set.")
+            raise MetaflowException("Cannot resolve checkpoint path without Namespace.")
         return sha256(ns.encode()).hexdigest()[:MAX_HASH_LEN]
 
     @classmethod
@@ -296,8 +291,9 @@ class WriteResolver:
     @classmethod
     def decompose_checkpoint_id(cls, checkpoint_id):
         if len(checkpoint_id.split("/")) != 7:
-            raise ValueError(
-                "TODO: set error when checkpoint_id is not in the correct format."
+            raise CheckpointException(
+                "`%s` environment variable is not in correct format."
+                % CHECKPOINT_UID_ENV_VAR_NAME
             )
 
         flow, run, step, taskid, taskidf, scope, attempt = checkpoint_id.split("/")
@@ -381,30 +377,6 @@ class WriteResolver:
             resolved_pathspec_info.current_attempt,
         )
 
-    @classmethod
-    def from_task(
-        cls,
-        task: Union["metaflow.Task", str],
-        scope: str,
-        task_identifier: Optional[str] = None,
-    ):
-
-        task, _current_attempt = task_utils.resolve_pathspec_and_attempt(task)
-        storage_backend = resolve_task_storage_backend(pathspec=task)
-        identifier = task_utils.resolve_task_identifier(task_identifier)
-
-        flowname, runid, stepname, taskid = task.split("/")
-        _checkpoint_datastore = CheckpointDatastore.init_write_store(
-            storage_backend,
-            pathspec=task,
-            scope=scope,
-            task_identifier=identifier,
-        )
-
-        return _checkpoint_datastore, cls.resolver_info(
-            flowname, runid, stepname, taskid, identifier, scope, _current_attempt
-        )
-
 
 class CheckpointReferenceResolver:
     """
@@ -427,7 +399,7 @@ class CheckpointReferenceResolver:
             name=key_comps.name,
         )
         if _checkpoint is None:
-            raise ValueError(
-                f"TODO: set error when checkpoint reference {checkpoint_key} is not found in the flow."
+            raise CheckpointNotAvailableException(
+                "Checkpoint with key `%s` not found." % checkpoint_key
             )
         return CheckpointArtifact.hydrate(_checkpoint)

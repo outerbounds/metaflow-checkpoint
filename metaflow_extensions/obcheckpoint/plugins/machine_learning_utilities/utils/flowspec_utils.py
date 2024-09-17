@@ -1,14 +1,9 @@
 from typing import Union, Optional, TYPE_CHECKING
 from metaflow import current
 
-from ..exceptions import (
-    TODOException,
-)
 from .identity_utils import (
     TaskIdentifier,
-    ResumeTaskNotFoundError,
-    AttemptEnum,
-    MAX_HASH_LEN,
+    FlowNotRunningException,
 )
 from collections import namedtuple
 
@@ -40,19 +35,18 @@ def resolve_pathspec_for_flowspec(
     run: "metaflow.FlowSpec" = None,
 ):
     if not current.is_running_flow:
-        raise ValueError(
-            "TODO: set error when no checkpointer(run=self) is set when flow is not running."
-        )
+        raise FlowNotRunningException
     control_task_pathspec = None
     if getattr(current, "parallel", None):
-        control_task_pathspec = "/".join(
-            [
-                current.flow_name,
-                current.run_id,
-                current.step_name,
-                current.parallel.control_task_id,
-            ]
-        )
+        if current.parallel.control_task_id:
+            control_task_pathspec = "/".join(
+                [
+                    current.flow_name,
+                    current.run_id,
+                    current.step_name,
+                    current.parallel.control_task_id,
+                ]
+            )
     return ResolvedTask(
         current.flow_name,
         current.run_id,
@@ -67,9 +61,7 @@ def resolve_pathspec_for_flowspec(
 
 def resolve_storage_backend(run: "metaflow.FlowSpec" = None):
     if not current.is_running_flow:
-        raise ValueError(
-            "TODO: set error when no checkpointer(run=self) is set when flow is not running."
-        )
+        raise FlowNotRunningException
     return run._datastore._storage_impl
 
 
@@ -79,9 +71,8 @@ def resolve_task_identifier(
     gang_schedule_task_idf_index=0,
 ):
     if not current.is_running_flow:
-        raise TODOException(
-            "TODO: Error resolving task identifier when flow is not running. "
-        )
+        raise FlowNotRunningException
+
     if gang_scheduled_task:
         return TaskIdentifier.for_parallel_task_index(run, gang_schedule_task_idf_index)
     return TaskIdentifier.from_flowspec(run)

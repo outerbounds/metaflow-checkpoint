@@ -4,7 +4,11 @@ from typing import Union
 # from tarfile import SUPPORTED_TYPES
 from typing import Optional, List
 from datetime import datetime
-from .exceptions import KeyNotCompatibleWithObjectException, TODOException
+from .exceptions import (
+    KeyNotCompatibleWithObjectException,
+    KeyNotCompatibleException,
+    IncompatibleObjectTypeException,
+)
 from .datastore.task_utils import init_datastorage_object
 
 # TODO !! : Clean up the constructor Garblegoop
@@ -325,8 +329,9 @@ class Factory:
     @classmethod
     def from_dict(cls, data):
         if "type" not in data or data["type"] not in cls.SUPPORTED_TYPES:
-            raise TODOException(
-                "Exception for when object in loading is not proper object"
+            raise IncompatibleObjectTypeException(
+                "Object type %s not in supported types: %s"
+                % (data.get("type") or str(data), cls.SUPPORTED_TYPES)
             )
         if data["type"] == ModelArtifact.TYPE:
             return ModelArtifact(**data)
@@ -350,7 +355,12 @@ class Factory:
     def load_from_key(cls, key_object, local_path, storage_backend):
         obj_type = cls.object_type_from_key(key_object)
         if obj_type is None:
-            raise TODOException("Key is not compatible with any object")
+            raise KeyNotCompatibleException(
+                key_object,
+                supported_types=", ".join(
+                    [ModelArtifact.TYPE, CheckpointArtifact.TYPE]
+                ),
+            )
         obj_type._load_from_key(key_object, local_path, storage_backend)
 
     @classmethod
@@ -359,7 +369,12 @@ class Factory:
     ) -> Union[CheckpointArtifact, ModelArtifact]:
         obj_type = cls.object_type_from_key(key_object)
         if obj_type is None:
-            raise TODOException("Key is not compatible with any object")
+            raise KeyNotCompatibleException(
+                key_object,
+                supported_types=", ".join(
+                    [ModelArtifact.TYPE, CheckpointArtifact.TYPE]
+                ),
+            )
         return obj_type._load_metadata_from_key(key_object, storage_backend)
 
 

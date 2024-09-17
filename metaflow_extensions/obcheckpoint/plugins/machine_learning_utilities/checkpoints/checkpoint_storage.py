@@ -2,19 +2,22 @@ import os
 from typing import Callable, Generator, Iterator, List, Optional, Union
 
 from metaflow.datastore.datastore_storage import DataStoreStorage
-from .constants import DEFAULT_NAME
-from ..exceptions import TODOException, KeyNotCompatibleWithObjectException
+from .constants import DEFAULT_NAME, CHECKPOINTS_STORAGE_PREFIX
+from ..exceptions import KeyNotCompatibleWithObjectException
 from ..utils.identity_utils import pathspec_hash
 from ..utils.general import replace_start_and_end_slash
 from ..datastore.core import allow_safe, DatastoreInterface, ObjectStorage
+from ..datastore.exceptions import (
+    DatastoreReadInitException,
+    DatastoreWriteInitException,
+    DatastoreNotReadyException,
+)
 from ..datastructures import CheckpointArtifact
 from ..datastore.utils import safe_serialize
 import json
 import re
 from datetime import datetime
 from collections import namedtuple
-
-CHECKPOINTS_PREFIX = "mf.checkpoints_6"  # TODO: [FIX-ME-BEFORE-RELEASE]
 
 ARTIFACT_STORE_NAME = "artifacts"
 
@@ -207,7 +210,7 @@ class CheckpointDatastore(DatastoreInterface):
         - this store helps reverse lookup the Checkpoint metadata object from the checkpoint key.
     """
 
-    ROOT_PREFIX = CHECKPOINTS_PREFIX
+    ROOT_PREFIX = CHECKPOINTS_STORAGE_PREFIX
 
     artifact_store: ObjectStorage = None
 
@@ -285,7 +288,9 @@ class CheckpointDatastore(DatastoreInterface):
             datastore._NAME_ENTROPY = _key_decomp.pathspec_hash
             datastore.set_root_prefix(_key_decomp.root_prefix)
         else:
-            raise TODOException("pathspec or checkpoint_key must be provided")
+            raise DatastoreReadInitException(
+                "pathspec or checkpoint_key must be provided"
+            )
 
         return datastore
 
@@ -304,7 +309,9 @@ class CheckpointDatastore(DatastoreInterface):
         task_identifier,
     ):
         if any([pathspec is None, scope is None, task_identifier is None]):
-            raise TODOException("pathspec, scope, task_identifier must be provided")
+            raise DatastoreWriteInitException(
+                "pathspec, scope, task_identifier must be provided"
+            )
         datastore = cls()
         flow_name, runid, step_name, taskid = pathspec.split("/")
 
@@ -354,7 +361,9 @@ class CheckpointDatastore(DatastoreInterface):
     ) -> CheckpointArtifact:
 
         if not (self.artifact_ready and self.metadata_ready):
-            raise TODOException("Datastore is not ready to save")
+            raise DatastoreNotReadyException(
+                "Checkpoints Datastore is not ready for write operations"
+            )
 
         _key = self.create_key_name(
             self._NAME_ENTROPY,
@@ -413,11 +422,15 @@ class CheckpointDatastore(DatastoreInterface):
     def latest(self, current_task=True) -> CheckpointArtifact:
         if current_task:
             if not self.metadata_ready:
-                raise TODOException("Metadata store is not ready")
+                raise DatastoreNotReadyException(
+                    "Checkpoint store is not ready to read the latest checkpoint in current task"
+                )
             _md = self.metadata_store._load_metadata("latest")
         else:
             if not self.artifact_ready:
-                raise TODOException("Artifact store is not ready")
+                raise DatastoreNotReadyException(
+                    "Checkpoint store is not ready to read the latest checkpoint"
+                )
             _md = self.artifact_metadatastore._load_metadata("latest")
 
         return CheckpointArtifact.from_dict(_md)
@@ -464,7 +477,7 @@ class CheckpointDatastore(DatastoreInterface):
                     "metadata",
                 )
             )
-        raise TODOException("Datastore is not ready to load metadata")
+        raise DatastoreNotReadyException("Datastore is not ready to load metadata")
 
     def list(
         self,
@@ -475,7 +488,9 @@ class CheckpointDatastore(DatastoreInterface):
 
         if not within_task:
             if not self.artifact_ready:
-                raise TODOException("Datastore is not ready to list")
+                raise DatastoreNotReadyException(
+                    "Checkpoint datastore is not ready to list all checkpoints"
+                )
             return _recover_checkpoints(
                 self.artifact_metadatastore,
                 key_decomposer=decompose_key_artifact_metadata_store,
@@ -484,7 +499,9 @@ class CheckpointDatastore(DatastoreInterface):
             )
 
         if not self.metadata_ready:
-            raise TODOException("Datastore is not ready to list")
+            raise DatastoreNotReadyException(
+                "Checkpoint datastore is not ready to list checkpoints within the task"
+            )
         return _recover_checkpoints(
             self.metadata_store,
             key_decomposer=decompose_key_metadata_store,

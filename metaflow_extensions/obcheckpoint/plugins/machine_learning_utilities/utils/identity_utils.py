@@ -2,7 +2,6 @@ from hashlib import sha256
 import json
 from typing import TYPE_CHECKING
 from metaflow.exception import MetaflowException
-from ..exceptions import TODOException
 from .constants import MAX_HASH_LEN
 
 
@@ -20,7 +19,17 @@ class AttemptEnum:
         return [cls.LATEST, cls.PREVIOUS, cls.FIRST]
 
 
-class ResumeTaskNotFoundError(MetaflowException):
+class IdentityException(MetaflowException):
+    pass
+
+
+class UnhashableValueException(MetaflowException):
+    def __init__(self, type):
+        self._type = type
+        super().__init__(f"Value of type %s is not safely hashable." % type)
+
+
+class FlowNotRunningException(MetaflowException):
     pass
 
 
@@ -41,23 +50,17 @@ def safe_hash(value):
             return sha256(serialized).hexdigest()
         except TypeError as e:
             # Handle the case where the object cannot be serialized
-            raise ValueError(f"Value of type {type(value)} is not safely hashable: {e}")
+            raise UnhashableValueException(str(type(value)))
 
 
-def _resolve_hash_of_current_foreach_stack(run: "metaflow.FlowSpec"):
-    """
-    There are several nuances to this problem.
-    1. The `stack_of_values` can have duplicates.
-        - Duplicates can be a problem because the
-    """
-    if run.index is None:
-        return None
-
-    stack = run.foreach_stack()
-    if stack is None:
-        return None
+def _resolve_hash_of_current_foreach_stack(stack):
 
     stack_of_values = [x[2] for x in stack]
+
+    # We add a value to the stack which is a deterministic value that is random enough that clashes become unlikely.
+    # Otherwise if the foreach value can contain a value that is same as the stepname, then the hash of the foreach
+    # value and the stepname will be the same causing a potential state clash
+    stack_of_values.append(safe_hash("foreach-task-entropy"))
     # create a hash of all the inputs in the stack.
     hashed_inputs = "".join([safe_hash(x) for x in stack_of_values])
 
@@ -70,14 +73,21 @@ def _resolve_hash_for_particular_parallel_index(
     run: "metaflow.FlowSpec",
     index,
 ):
-    if run.index is None:
-        return None
+    # It is assumed here that the function is only called for a run
+    # with a parallel task.
     stack = run.foreach_stack()
-    if stack is None:
-        return None
+    # to derive the task identifier of the gang scheduled parallel jobs
+    # we need to ensure that all tasks within the gang get the same task identifer.
+    # This value is based on the index of the task provided to this function. (for most default cases it will be 0)
+    # We achieve this be poping the index of the foreach stack and replacing it with the index of the task.
     stack_of_values = [x[2] for x in stack]
     stack_of_values.pop()
-    stack_of_values.append(index)
+    # When we replace the index of the foreach stack, we can also potentially hit a situation where the task
+    # is converted from the parallel task to a regular foreach task. At this point we need to ensure that the
+    # task identifier is not the same as the parallel task. To ensure this, we add a value to the stack which
+    # is a deterministic value that is random enough that clashes become unlikely.
+    stack_of_values.extend([index, safe_hash("parallel-task-entropy")])
+
     # create a hash of all the inputs in the stack.
     hashed_inputs = "".join([safe_hash(x) for x in stack_of_values])
 
@@ -87,14 +97,12 @@ def _resolve_hash_for_particular_parallel_index(
 
 
 class TaskIdentifier:
-    @classmethod
-    def from_flowspec_origin_run(cls, run: "metaflow.FlowSpec"):
-        from metaflow import current
+    """
+    Any change to this class's core logic can create SEVERE backwards compatibility issues
+    since this class helps derive the task identifier for the checkpoints.
 
-        if not current.is_running_flow:
-            raise TODOException("TODO: Set error about Checkpointer(run=self).")
-
-        raise NotImplementedError
+    IDEALLY, the identifier construction logic of this file should be kept as is.
+    """
 
     @classmethod
     def for_parallel_task_index(cls, run: "metaflow.FlowSpec", index: int):
@@ -103,10 +111,6 @@ class TaskIdentifier:
         index of the task in the gang.
         """
         base_task_identifier = _resolve_hash_for_particular_parallel_index(run, index)
-        if base_task_identifier is None:
-            raise TODOException(
-                "TODO: Unable to resolve the base task idenfitier for the parallel task."
-            )
         return base_task_identifier[:MAX_HASH_LEN]
 
     @classmethod
@@ -114,16 +118,16 @@ class TaskIdentifier:
         from metaflow import current
 
         if not current.is_running_flow:
-            raise TODOException("TODO: Set error when flow is not running .")
+            raise FlowNotRunningException
 
         base_task_identifier = None
         # Only resolving identifier for foreach value first.
         # If it is not present, then we will resolve the identifier
-        # based on the `task-id` of the previous task.
-        base_task_identifier = _resolve_hash_of_current_foreach_stack(run)
-
-        attempt = current.retry_count
-        if base_task_identifier is None:
+        # based on the stepname.
+        if run.index is not None:
+            stack = run.foreach_stack()
+            base_task_identifier = _resolve_hash_of_current_foreach_stack(stack)
+        else:
             # If it is not a foreach task, the the identifier can be
             # set a static value (like hash of the stepname) since it will
             # make list prefixing a lot simpler and the logic of understanding

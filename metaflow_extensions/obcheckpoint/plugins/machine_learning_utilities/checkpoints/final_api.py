@@ -10,27 +10,13 @@ from .constructors import (
     _instantiate_checkpoint,
     load_checkpoint,
 )
-from ..exceptions import TODOException
+from .exceptions import CheckpointNotAvailableException
 
 if TYPE_CHECKING:
     import metaflow
     from .core import Checkpointer
 
 
-def reset_namespace(f):
-    def func(*args, **kwargs):
-        from metaflow import namespace, get_namespace
-
-        _current_ns = get_namespace()
-        namespace(None)
-        op = f(*args, **kwargs)
-        namespace(_current_ns)
-        return op
-
-    return func
-
-
-@reset_namespace
 def _extract_checkpoints_for_task(
     task: Union["metaflow.Task", str], attempt: Optional[Union[int, str]] = None
 ):
@@ -41,15 +27,15 @@ def _extract_checkpoints_for_task(
             try:
                 _attempt = int(attempt)
             except ValueError:
-                raise TODOException(
-                    "Implement exception when the attempt is not a valid integer"
-                )
-            task = Task(task, attempt=_attempt)
-        task = Task(task)
+                raise ValueError("Attempt number must be an integer. Got: %s" % attempt)
+            task = Task(task, attempt=_attempt, _namespace_check=False)
+        task = Task(task, _namespace_check=False)
     try:
         return task[TASK_CHECKPOINTS_ARTIFACT_NAME].data
     except NameError:
-        raise TODOException("Implement exception when the task is not present")
+        raise CheckpointNotAvailableException(
+            "Checkpoints were not recorded for the task"
+        )
 
 
 class Checkpoint:
@@ -148,8 +134,8 @@ class Checkpoint:
         """
 
         if self._checkpointer is None and task is None:
-            raise TODOException(
-                "Calling `Checkpoint.list` requires a `task` object to be passed in the arguments if it is not instanted in Write mode. "
+            raise ValueError(
+                "Calling `Checkpoint.list` requires a `task` argument when its is called outside a Metaflow process."
             )
         _gen = None
         if task is not None:
@@ -196,9 +182,6 @@ class Checkpoint:
             )
         if path is None:
             path = self.directory
-
-        if type(reference) == str:
-            raise TODOException("Implement load from checkpoint-id")
 
         load_checkpoint(
             checkpoint=reference,

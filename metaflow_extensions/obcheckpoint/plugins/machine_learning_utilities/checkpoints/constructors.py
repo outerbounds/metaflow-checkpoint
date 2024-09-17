@@ -1,5 +1,4 @@
 from typing import List, Dict, Union, Tuple, Optional, TYPE_CHECKING
-from ..exceptions import TODOException
 from .core import (
     Checkpointer,
     WriteResolver,
@@ -31,8 +30,8 @@ def _instantiate_checkpoint(
     elif CHECKPOINT_UID_ENV_VAR_NAME in os.environ:
         datastore, resolver_info = WriteResolver.from_environment()
     else:
-        raise TODOException(
-            "TODO: set error when There is no way to instantiate the checkpoint object."
+        raise ValueError(
+            "Creating a `Checkpoint` object requires either a `FlowSpec` instance or a `METAFLOW_CHECKPOINT_UID` environment variable."
         )
 
     # Technically at this point `resolver_info` contains all the information to create
@@ -41,7 +40,7 @@ def _instantiate_checkpoint(
         a is None for a in resolver_info
     ):  # Ideally we should NOT be hitting this line at ALL!
         raise ValueError(
-            "TODO: Missing enough information to create a Checkpointer object."
+            "Missing enough information to instantiate a Checkpoint object."
         )
     chkpt = Checkpointer(
         datastore=datastore,
@@ -59,15 +58,16 @@ def load_checkpoint(  # Return load status
     checkpoint: Union[CheckpointArtifact, dict, str],  # User Facing
     local_path: str,  # User Facing
 ):
-    if any([checkpoint is None, local_path is None]):
-        raise TODOException("TODO: set error when no checkpoint is provided.")
-
+    # It's assumed that everything is already correctly passsed
     if isinstance(checkpoint, CheckpointArtifact) or isinstance(checkpoint, dict):
         _load_checkpoint_from_reference(checkpoint, local_path)
     elif isinstance(checkpoint, str):
         _load_checkpoint_from_key(checkpoint, local_path)
     else:
-        raise TODOException("TODO: set error when the checkpoint is not a valid type.")
+        raise ValueError(
+            "Invalid checkpoint object. Expected CheckpointArtifact, dict or str. Got: %s"
+            % type(checkpoint)
+        )
 
 
 def _load_checkpoint_from_reference(
