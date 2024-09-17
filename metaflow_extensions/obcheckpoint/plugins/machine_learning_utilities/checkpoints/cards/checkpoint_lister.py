@@ -290,14 +290,14 @@ class CheckpointListRefresher(CardRefresher):
         current_card.extend(self._footer_components())
         current_card.refresh()
 
-    def first_time_render(self, current_card, data_object):
+    def first_time_render(self, current_card, data_object, force_refresh=False):
         current_card.clear()
         current_card.extend(self._header_components())
         keys_going_in_table = self._make_table_objects(data_object)
         if len(keys_going_in_table) == 0:
             current_card.extend(
                 [
-                    Markdown("## List of Checkpoints Created Within The Task"),
+                    Markdown("## Checkpoints created within the task"),
                     Markdown(
                         "_no checkpoints found_",
                     ),
@@ -318,10 +318,10 @@ class CheckpointListRefresher(CardRefresher):
 
         current_card.append(Markdown("## Checkpoints Timeline"))
         current_card.append(self._timeline_chart)
-        current_card.append(Markdown("## List of Checkpoints"))
+        current_card.append(Markdown("## Checkpoints created within the task"))
         current_card.append(self._table)
         current_card.extend(self._footer_components())
-        current_card.refresh()
+        current_card.refresh(force=force_refresh)
         self._rendered = True
 
     def _make_table_objects(self, data_object):
@@ -356,9 +356,14 @@ class CheckpointListRefresher(CardRefresher):
 
     def on_update(self, current_card, data_object):
         if not self._rendered:
-            self.first_time_render(current_card, data_object)
+            self.first_time_render(current_card, data_object, force_refresh=False)
         else:
             self.data_update(current_card, data_object)
+
+    def on_final(self, current_card, data_object):
+        self._saved_checkpoints = {}
+        self._rendered = False
+        self.first_time_render(current_card, data_object, force_refresh=True)
 
 
 def _derive_appropriate_size(size):
@@ -379,10 +384,16 @@ class CheckpointsCollector(Thread):
         self._interval = interval
         self._exit_event = Event()
         self._refresher = refresher
-        self.daemon = True
 
     def collect(self):
         return list(self.current.checkpoint.list(attempt=self.current.retry_count))
+
+    def final_update(self):
+        current_card = self.current.card[self._refresher.CARD_ID]
+        data = self.collect()
+        if len(data) == 0:
+            return
+        self._refresher.on_final(current_card, data)
 
     def run_update(self):
         current_card = self.current.card[self._refresher.CARD_ID]
@@ -403,4 +414,8 @@ class CheckpointsCollector(Thread):
     def stop(self):
         if not self._exit_event.is_set():
             self._exit_event.set()
-            self.run_update()
+            # We expose a `final_update` so that the card can be
+            # called with a `force` update so that the new card
+            # is rendered when the thread is stopped.
+            self.final_update()
+            self.join()

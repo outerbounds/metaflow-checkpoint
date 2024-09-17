@@ -171,7 +171,7 @@ class ModelListRefresher(CardRefresher):
                 continue
             self._saved_models[_model.key] = [
                 Markdown(str(_model.uuid)),
-                Markdown(format(str(_model.created_on))),
+                Markdown(format_datetime(str(_model.created_on))),
                 Markdown(
                     _derive_appropriate_size(_model.size),
                 ),
@@ -181,7 +181,7 @@ class ModelListRefresher(CardRefresher):
             keys_going_in_table.append(_model.key)
         return keys_going_in_table
 
-    def first_time_render(self, current_card, saved_models):
+    def first_time_render(self, current_card, saved_models, force_refresh=False):
         current_card.clear()
         current_card.extend(self._header_components())
         keys_going_in_table = self._make_table_objects(saved_models)
@@ -198,7 +198,7 @@ class ModelListRefresher(CardRefresher):
         current_card.append(self._table)
 
         current_card.extend(self._footer_components())
-        current_card.refresh()
+        current_card.refresh(force=force_refresh)
         self._rendered = True
 
     def data_update(self, current_card, saved_models):
@@ -212,9 +212,14 @@ class ModelListRefresher(CardRefresher):
 
     def on_update(self, current_card, saved_models):
         if not self._rendered:
-            self.first_time_render(current_card, saved_models)
+            self.first_time_render(current_card, saved_models, force_refresh=False)
         else:
             self.data_update(current_card, saved_models)
+
+    def on_final(self, current_card, data_object):
+        self._saved_models = {}
+        self._rendered = False
+        self.first_time_render(current_card, data_object, force_refresh=True)
 
 
 def _derive_appropriate_size(size):
@@ -235,10 +240,16 @@ class ModelsCollector(Thread):
         self._interval = interval
         self._exit_event = Event()
         self._refresher = refresher
-        self.daemon = True
 
     def collect(self):
         return self.current.model._saved_models
+
+    def final_update(self):
+        current_card = self.current.card[self._refresher.CARD_ID]
+        data = self.collect()
+        if len(data) == 0:
+            return
+        self._refresher.on_final(current_card, data)
 
     def run_update(self):
         current_card = self.current.card[self._refresher.CARD_ID]
@@ -259,4 +270,8 @@ class ModelsCollector(Thread):
     def stop(self):
         if not self._exit_event.is_set():
             self._exit_event.set()
-            self.run_update()
+            # We expose a `final_update` so that the card can be
+            # called with a `force` update so that the new card
+            # is rendered when the thread is stopped.
+            self.final_update()
+            self.join()

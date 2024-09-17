@@ -347,7 +347,7 @@ class CheckpointDecorator(StepDecorator, CardDecoratorInjector):
             step_name,
             CheckpointListRefresher.CARD_ID,
             "blank",
-            refresh_interval=10,
+            refresh_interval=2,
         )
         self._chkptr = None
         self._collector_thread = None
@@ -356,7 +356,6 @@ class CheckpointDecorator(StepDecorator, CardDecoratorInjector):
         self, exception, step_name, flow, graph, retry_count, max_user_code_retries
     ):
         if self._collector_thread is not None:
-            self._collector_thread.run_update()
             self._collector_thread.stop()
 
         if self._chkptr is not None:
@@ -456,7 +455,7 @@ class CheckpointDecorator(StepDecorator, CardDecoratorInjector):
                 self._loaded_checkpoint_lineage,
                 self._load_policy,
             ),
-            interval=5,
+            interval=3,
         )
 
         def _wrapped_step_func(_collector_thread, *args, **kwargs):
@@ -473,7 +472,6 @@ class CheckpointDecorator(StepDecorator, CardDecoratorInjector):
         self, step_name, flow, graph, retry_count, max_user_code_retries
     ):
         if self._collector_thread is not None:
-            self._collector_thread.run_update()
             self._collector_thread.stop()
 
         if self._chkptr is not None:

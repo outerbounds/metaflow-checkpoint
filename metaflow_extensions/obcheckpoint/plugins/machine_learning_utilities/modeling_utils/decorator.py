@@ -52,7 +52,7 @@ class ModelDecorator(StepDecorator, CardDecoratorInjector):
             step_name,
             ModelListRefresher.CARD_ID,
             "blank",
-            refresh_interval=10,
+            refresh_interval=2,
         )
         self._collector_thread = None
         # We add to INTERNAL_ARTIFACTS_SET here because the decorator adds internal artifacts to the
@@ -105,7 +105,6 @@ class ModelDecorator(StepDecorator, CardDecoratorInjector):
         self, exception, step_name, flow, graph, retry_count, max_user_code_retries
     ):
         if self._collector_thread is not None:
-            self._collector_thread.run_update()
             self._collector_thread.stop()
 
     def task_post_step(
@@ -115,7 +114,6 @@ class ModelDecorator(StepDecorator, CardDecoratorInjector):
             return
         self._save_metadata_about_models(self._serializer._saved_models)
         if self._collector_thread:
-            self._collector_thread.run_update()
             self._collector_thread.stop()
 
     def task_decorate(
@@ -125,7 +123,7 @@ class ModelDecorator(StepDecorator, CardDecoratorInjector):
 
         self._collector_thread = ModelsCollector(
             ModelListRefresher(current.model.loaded.info),
-            interval=5,
+            interval=1,
         )
         # Wrap the step_func in a function that will write to current.card["checkpoint_info"] the lineage card
         # and then call the step_func.
