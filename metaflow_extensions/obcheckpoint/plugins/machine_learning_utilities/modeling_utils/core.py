@@ -235,13 +235,10 @@ class ModelSerializer:
         label=None,
         metadata=None,
     ):
-        # TODO : [RESEACH ABSTRACTIONAL LAG]: Research how the DataStorage should handle
-        # the serialization of the bytes stream. It works differently for different
-        # datastores.
         model_artifact = self._serialize_to_datastore(
             path,
-            TarHandler.TYPE,  # TODO : Make this more customizable.
-            TarHandler.STORAGE_FORMAT,  # TODO : Make this more customizable.
+            TarHandler.TYPE,  # TODO [POST RELEASE]: clean this up to even support directories
+            TarHandler.STORAGE_FORMAT,
             metadata=metadata,
             label=label,
         ).to_dict()

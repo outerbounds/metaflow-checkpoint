@@ -154,8 +154,6 @@ class CurrentCheckpointer:
 
     def _setup_task_first_load(self, load_policy, flow):
         checkpoint = None
-        # TODO : Its assumed the `load_policy` is set correctly and validation has
-        # happened before this point.
         if load_policy == "eager":
             checkpoint = CheckpointLoadPolicy.eager(
                 self._default_checkpointer._checkpointer._checkpoint_datastore,
@@ -186,7 +184,7 @@ class CurrentCheckpointer:
 
     def save(
         self,
-        path: Optional[Union[str, os.PathLike, List[str], List[os.PathLike]]] = None,
+        path: Optional[Union[str, os.PathLike]] = None,
         name: Optional[str] = DEFAULT_NAME,
         metadata: Optional[Dict] = {},
         latest: bool = True,
@@ -194,7 +192,7 @@ class CurrentCheckpointer:
         if path is None:
             path = self.directory
         return self._default_checkpointer.save(
-            path_or_paths=path, name=name, metadata=metadata, latest=latest
+            path=path, name=name, metadata=metadata, latest=latest
         )
 
     def list(
@@ -409,17 +407,26 @@ class CheckpointDecorator(StepDecorator, CardDecoratorInjector):
             run=flow,
             gang_scheduled_task=gang_scheduled_task,
             gang_schedule_task_idf_index=0,
-            # TODO : Make this a little more customizable in the future.
+            # TODO [POST RELEASE]: Make this a little more customizable in the future.
             # since the @parallel tasks can even be HPO style tasks instead
             # of gang scheduled tasks.
         )
 
-        # TODO : Print a warning messages saying that the step is an @parallel
-        # step and it will mean that the decorator is follow gang scheduling semantics
-        # so all workers and control task will be writing to the same path (i.e. the same
-        # task identifier). If users wish to write checkpoints that are across different
-        # workers, they should ensure that the `name` is differently set in the `save`
-        # method so that checkpoints don't get overwritten.
+        if gang_scheduled_task:
+            # A step with an @parallel will mean that the decorator is follow gang scheduling semantics
+            # so all workers and control task will be writing to the same path (i.e. the same
+            # task identifier). If users wish to write checkpoints that are across different
+            # workers, they should ensure that the `name` is differently set in the `save`
+            # method so that checkpoints don't get overwritten.
+            warning_message(
+                (
+                    "The step has a @parallel decorator and so checkpoints will be treated as if"
+                    "they are coming from the same task. The checkpoints will be written/loaded from the control task."
+                    "All tasks within this step will write to the same path i.e. the path of the control task."
+                ),
+                logger=self._logger,
+                ts=False,
+            )
         self._loaded_checkpoint = self._setup_checkpointer(
             flow,
             default_task_identifier,

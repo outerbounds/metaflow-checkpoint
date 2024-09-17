@@ -330,14 +330,9 @@ class CheckpointListRefresher(CardRefresher):
             _chckpt = CheckpointArtifact.from_dict(checkpoint)
             if _chckpt.key in self._saved_checkpoints:
                 continue
-            # TODO : We can have a Table that contains all the checkpoints
-            # and each time there will be a new checkpoint, we can
-            # reconstruct the table.
             self._saved_checkpoints[_chckpt.key] = [
                 Markdown(str(_chckpt.name)),
-                Markdown(
-                    format_datetime(str(_chckpt.created_on))
-                ),  # TODO Make this a human readable date
+                Markdown(format_datetime(str(_chckpt.created_on))),
                 Markdown(
                     _derive_appropriate_size(_chckpt.size),
                 ),

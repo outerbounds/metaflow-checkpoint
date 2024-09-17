@@ -153,7 +153,6 @@ class ModelListRefresher(CardRefresher):
             x.append(_make_loaded_models_table(self._loaded_models))
         else:
             x.append(Markdown("_No models loaded_"))
-        # TODO : Add loaded Model Information
         return x
 
     def _footer_components(self):
@@ -170,14 +169,9 @@ class ModelListRefresher(CardRefresher):
             _model = ModelArtifact.from_dict(model)
             if _model.key in self._saved_models:
                 continue
-            # TODO : We can have a Table that contains all the checkpoints
-            # and each time there will be a new checkpoint, we can
-            # reconstruct the table.
             self._saved_models[_model.key] = [
                 Markdown(str(_model.uuid)),
-                Markdown(
-                    format(str(_model.created_on))
-                ),  # TODO Make this a human readable date
+                Markdown(format(str(_model.created_on))),
                 Markdown(
                     _derive_appropriate_size(_model.size),
                 ),

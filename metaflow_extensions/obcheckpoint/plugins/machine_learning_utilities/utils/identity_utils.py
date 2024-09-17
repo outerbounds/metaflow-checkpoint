@@ -137,11 +137,6 @@ class TaskIdentifier:
             step_name = current.step_name
             base_task_identifier = safe_hash(step_name)
 
-        # TODO: Notify the user of the following cases, when Metaflow can __might__ have a state clash.:
-        # - base_task_identifier from foreach stack has the same hash as hash of the step_name.
-        # - the base_task_identifier is not computable for the foreach stack because the values
-        #   are not computable.
-
         return base_task_identifier[:MAX_HASH_LEN]
 
     def from_task(cls, task: "metaflow.Task", use_origin=True):

@@ -61,9 +61,10 @@ def resolve_storage_backend(pathspec: Union[str, "metaflow.Task"] = None):
         return _get_flow_datastore(pathspec)._storage_impl
     elif isinstance(pathspec, str):
         if len(pathspec.split("/")) != 4:
-            raise ValueError(
-                "TODO: set error when pathspec is not a valid task pathspec."
-            )
+            raise ValueError("Pathspec is not of the correct format.")
         return _get_flow_datastore(Task(pathspec))._storage_impl
     else:
-        raise ValueError("TODO: set error when no pathspec cannot be resolve.")
+        raise ValueError(
+            "Pathspec is of invalid type. It should be either a string or a Task object but got %s"
+            % type(pathspec)
+        )

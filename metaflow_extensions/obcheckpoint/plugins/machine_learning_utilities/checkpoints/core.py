@@ -64,9 +64,7 @@ class Checkpointer:
         self,
         datastore: CheckpointDatastore,
         attempt: int = 0,
-        # TODO: [FEEDBACK-CHANGE]: We need to remove the value of `attempt` from the constructor
-        # Ideally the top level abstraction such as `Checkpoint` or `CurrentCheckpoint` need to handle
-        # the `attempt` value.
+        # TODO: [POST RELEASE]: See if attempt can be moved elsewhere
     ) -> None:
         self._checkpoint_datastore = datastore
         self._attempt = attempt
@@ -167,7 +165,6 @@ class CheckpointLoadPolicy:
         cls,
         datastore: CheckpointDatastore,
         flow: "metaflow.FlowSpec",
-        # TODO : Figure how to assign the right load policy in a gang scheduled task
     ) -> Union[CheckpointArtifact, None]:
         """
         ```python
@@ -192,7 +189,6 @@ class CheckpointLoadPolicy:
         cls,
         datastore: CheckpointDatastore,
         flow: "metaflow.FlowSpec",
-        # TODO : Figure how to assign the right load policy in a gang scheduled task
     ) -> Union[CheckpointArtifact, None]:
         """
         ```python
@@ -233,8 +229,6 @@ class ScopeResolver:
         return sha256(tags[0].split(":")[1].encode()).hexdigest()[:MAX_HASH_LEN]
 
 
-# TODO : [CORE-CLEANUP]: Figure the code paths where the `Checkpoint` object gets instantiated
-# and the possible input mechanisms of instantiating this object
 class ReadResolver:
     """
     Responsible for instantiating the `CheckpointDatastore` during read operations

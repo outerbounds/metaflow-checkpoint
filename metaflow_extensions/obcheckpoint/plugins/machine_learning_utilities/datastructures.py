@@ -11,8 +11,6 @@ from .exceptions import (
 )
 from .datastore.task_utils import init_datastorage_object
 
-# TODO !! : Clean up the constructor Garblegoop
-
 
 class MetaflowDataArtifactReference:
 
@@ -111,6 +109,14 @@ class MetaflowDataArtifactReference:
     # ! INHERIT AND OVERRIDE (Private from user)
     @classmethod
     def _valid_reference_key(cls, reference_key):
+        raise NotImplementedError
+
+    @classmethod
+    def _load_from_key(cls, key, local_path, storage_backend):
+        raise NotImplementedError
+
+    @classmethod
+    def _load_metadata_from_key(cls, key, storage_backend):
         raise NotImplementedError
 
 
@@ -221,7 +227,6 @@ class ModelArtifact(MetaflowDataArtifactReference):
     def _load_metadata_from_key(cls, key, storage_backend) -> "ModelArtifact":
         from .modeling_utils.core import _load_model_metadata
 
-        # Todo add this to the top
         return cls(
             **_load_model_metadata(
                 storage_backend,
@@ -264,7 +269,7 @@ class CheckpointArtifact(MetaflowDataArtifactReference):
         super().__init__(**kwargs)
 
     def _load(self, storage_backend, local_path):
-        # TODO : [loading refactor]: Check if we can move this somewhere concise.
+        # TODO [POST RELEASE]: Check if we can move this somewhere else.
         from .checkpoints.core import Checkpointer
 
         _checkpointer = Checkpointer._from_checkpoint_and_storage_backend(

@@ -57,33 +57,33 @@ class Checkpoint:
     def _set_checkpointer(self, checkpointer: "Checkpointer"):
         self._checkpointer = checkpointer
 
-    def save(self, path_or_paths=None, metadata=None, latest=True, name=DEFAULT_NAME):
+    def save(self, path=None, metadata=None, latest=True, name=DEFAULT_NAME):
         """
         saves the checkpoint to the datastore (resemble's a create op)
 
         Parameters
         ----------
 
-        - `path_or_paths`:
-            - path/s to directory/ies
-            - path/s to file/s
+        - `path` (str or os.PathLike):
+            - path to directory
+            - path to file
         - `name`:
             - name of the checkpoint
         - `metadata`:
             - metadata of the checkpoint
         """
-        if path_or_paths is None and self.directory is None:
+        if path is None and self.directory is None:
             raise ValueError(
                 "`path` cannot be None when the Checkpoint object is not instantiated with a context manager. "
             )
-        if path_or_paths is None:
-            path_or_paths = self.directory
+        if path is None:
+            path = self.directory
         if self._checkpointer is None:
             self = _instantiate_checkpoint(self)
         if metadata is None:
             metadata = {}
         return self._checkpointer.save(
-            paths=path_or_paths, name=name, metadata=metadata, latest=latest
+            paths=path, name=name, metadata=metadata, latest=latest
         ).to_dict()
 
     def __enter__(self):
