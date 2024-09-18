@@ -14,9 +14,9 @@ Examples for these decorators can be found in [this repository](https://github.c
 
 ### `@checkpoint` Decorator
 
-The `@checkpoint` decorator alleviates the pain points associated with saving and reloading the state of your program in Metaflow flows. It also handles version control in multi-user settings by isolating checkpoints per user and run. Whether it's a checkpoint created by a machine learning model or intermediate data required in case of crashes, this decorator simplifies state management and failure recovery.
+The `@checkpoint` decorator alleviates the pain points associated with saving and reloading the state of your program (a Metaflow `@step`) in Metaflow flows. It also handles version control in multi-user settings by isolating checkpoints per user and run. Whether it's a checkpoint created by a machine learning model or intermediate data required in case of crashes, this decorator simplifies state management and failure recovery.
 
-- **Checkpointing**: Save the state of your flow at designated points.
+- **Checkpointing**: Save the state of your `@step` at designated points.
 - **Seamless Recovery**: Restart your job from the last checkpoint upon retries without any manual intervention.
 - **User Isolation**: Checkpoints are managed per user to prevent overwriting in collaborative environments.
 - **Ease of Use**: Minimal code changes required to implement checkpointing.
@@ -34,7 +34,7 @@ The `@huggingface_hub` decorator allows you to load large models from Hugging Fa
 
 The `@model` decorator provides a trivial way to save and load models/checkpoints created as part of your Metaflow flow. 
 
-- **Simplified Model Loading**: Automatically load models based on references and identifiers provided by users. 
+- **Simplified Model Loading**: Automatically load models based on references and identifiers created by decorators such as `@model`/`@checkpoint`/`@huggingface_hub`. 
 - **Model Identity**: Associates a uniquie identity to models so that there is clear distinction between different versions making it easy to track their lineage. 
 
 
