@@ -1,10 +1,11 @@
 __mf_extensions__ = "obcheckpoint"
 
-import pkg_resources
 from ..plugins.machine_learning_utilities.checkpoints.final_api import Checkpoint
 from ..plugins.machine_learning_utilities.datastructures import load_model
 
 try:
+    import pkg_resources
+
     __version__ = pkg_resources.get_distribution("metaflow-checkpoint").version
 except:
     # this happens on remote environments since the job package
