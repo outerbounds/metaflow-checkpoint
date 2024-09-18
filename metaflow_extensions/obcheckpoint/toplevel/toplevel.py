@@ -1,9 +1,7 @@
 __mf_extensions__ = "obcheckpoint"
 
 import pkg_resources
-from ..plugins.machine_learning_utilities.checkpoints import (
-    final_api as checkpoint_utils,
-)
+from ..plugins.machine_learning_utilities.checkpoints.final_api import Checkpoint
 from ..plugins.machine_learning_utilities.datastructures import load_model
 
 try:
