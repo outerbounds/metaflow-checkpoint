@@ -180,6 +180,7 @@ def generate_vega_timeline(data_objects):
             {
                 "type": "rect",
                 "name": "rectangles",
+                "zindex": 2,
                 "from": {"data": "checkpoints"},
                 "encode": {
                     "enter": {
@@ -199,6 +200,7 @@ def generate_vega_timeline(data_objects):
             {
                 "type": "text",
                 "name": "labels",
+                "zindex": 3,
                 "from": {"data": "rectangles"},
                 "encode": {
                     "enter": {
