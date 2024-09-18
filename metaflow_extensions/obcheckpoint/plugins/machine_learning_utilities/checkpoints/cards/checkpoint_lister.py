@@ -73,9 +73,28 @@ def generate_vega_timeline(data_objects):
     min_t = earliest_time.timestamp() * 1000
     max_t = latest_time.timestamp() * 1000
 
+    _CHART_HEIGHT = 250
+    _HEIGHT_SCALE = 50
+
     # Determine the appropriate 'nice' value based on the time range
     nice_value, date_format_for_x_axis = determine_nice_value(time_range_seconds)
 
+    # We use a dynamic scaling factor to ensure that the rectangles in the timeline chart
+    # don't overlap thereby we need to extend the horizontal line under each rectangle dynamically
+    # based on when was the previous
+    names = list(set(x["name"] for x in sorted_data))
+    max_bars = _CHART_HEIGHT // _HEIGHT_SCALE
+    bar_heights_by_type = {}
+    for idx, name in enumerate(names):
+        _scaling_factor = idx % max_bars
+        bar_heights_by_type[name] = (
+            _scaling_factor,
+            _HEIGHT_SCALE + (_scaling_factor * _HEIGHT_SCALE),
+        )
+
+    for obj in sorted_data:
+        obj["bar_height"] = bar_heights_by_type[obj["name"]][1]
+        obj["scaling_factor"] = bar_heights_by_type[obj["name"]][0]
     # Prepare the Vega data array for the timeline
     vega_data = [
         {
@@ -86,6 +105,7 @@ def generate_vega_timeline(data_objects):
             ].isoformat(),  # ISO format is directly supported by Vega
             "timestamp": obj["created_on"].timestamp()
             * 1000,  # Timestamps in milliseconds
+            "bar_height": obj["bar_height"],
             "description": f"Version ID: {obj['name']}.{obj['version_id']}, Created On: {human_readable_date(obj['created_on'])}",
         }
         for obj in sorted_data
@@ -95,7 +115,7 @@ def generate_vega_timeline(data_objects):
     vega_spec = {
         "$schema": "https://vega.github.io/schema/vega/v5.json",
         "width": 800,  # Increased the width
-        "height": 200,
+        "height": _CHART_HEIGHT,
         "padding": 5,
         "config": {
             "text": {"font": "Helvetica, Arial, sans-serif"},
@@ -166,9 +186,11 @@ def generate_vega_timeline(data_objects):
                         "width": {"signal": "rectWidth"},
                         "height": {"signal": "rectHeight"},
                         "x": {"signal": "scale('xScale',datum.timestamp)-rectWidth/2"},
-                        "y": {"signal": "rectY"},
+                        "y": {"signal": "datum.bar_height"},
+                        "rectCenter": {"signal": "[rectWidth / 2, datum.bar_height]"},
                         "fill": {"scale": "colorScale", "field": "name"},
                         "tooltip": {"signal": "{'Description': datum.description}"},
+                        "bar_height": {"field": "bar_height"},
                     },
                     "update": {"fillOpacity": {"value": 1}},
                     "hover": {"fillOpacity": {"value": 0.5}},
@@ -181,12 +203,15 @@ def generate_vega_timeline(data_objects):
                 "encode": {
                     "enter": {
                         "text": {"signal": "datum.datum.name_version"},
-                        "x": {"signal": "datum.x+rectCenter[0]"},
-                        "y": {"signal": "rectCenter[1]"},
+                        "x": {"signal": "datum.x+datum.rectCenter[0]"},
+                        "y": {"signal": "datum.rectCenter[1] + rectHeight/2"},
                         "align": {"value": "center"},
+                        "rule_y": {"signal": "datum.rectCenter[1]"},
+                        # "rectCenter": {"field": "datum.rectCenter"},
                         "baseline": {"value": "middle"},
                         "fontWeight": {"value": "bold"},
                         "fill": {"value": "black"},
+                        "bar_height": {"field": "datum.bar_height"},
                     }
                 },
                 "interactive": False,
@@ -198,7 +223,7 @@ def generate_vega_timeline(data_objects):
                     "enter": {
                         "x": {"signal": "datum.x"},
                         "x2": {"signal": "datum.x"},
-                        "y": {"signal": "datum.y+rectCenter[0]-5"},
+                        "y": {"signal": "datum.rule_y+rectHeight"},
                         "y2": {"signal": "height"},
                         "strokeWidth": {"value": 2},
                     }
