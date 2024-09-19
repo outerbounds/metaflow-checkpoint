@@ -8,7 +8,7 @@ from .model_storage import ModelDatastore
 from .exceptions import LoadingException
 from ..datastore.utils import safe_serialize
 from ..utils.general import get_path_size, unit_convert, warning_message
-from ..utils.identity_utils import MAX_HASH_LEN
+from ..utils.identity_utils import MAX_HASH_LEN, safe_hash
 from ..utils.serialization_handler import TarHandler, SERIALIZATION_HANDLERS
 from ..datastructures import ModelArtifact, Factory, MetaflowDataArtifactReference
 from uuid import uuid4
@@ -43,6 +43,27 @@ def _get_id(label):
 
 
 class LoadedModels:
+    """
+    A class that loads models from the datastore and stores them in a temporary directory.
+    This class helps manage all the models loaded via `@model(load=...)` decorator and
+    `current.model.load` method.
+
+    It is exposed via the `current.model.loaded` property. It is a dictionary like object
+    that stores the loaded models in a temporary directory. The keys of the dictionary are the
+    artifact names and the values are the paths to the temporary directories where the models are stored.
+
+    Usage:
+    ------
+    ```python
+        @model(load=["model_key", "chckpt_key"])
+        @step
+        def mid_step(self):
+            import os
+            os.listdir(current.model.loaded["model_key"])
+            os.listdir(current.model.loaded["chckpt_key"])
+    ```
+    """
+
     def __init__(
         self,
         storage_backend,
@@ -71,7 +92,6 @@ class LoadedModels:
         # self._artifact_names = artifact_names
         self._init_loaded_models(
             flow,
-            storage_backend,
             artifact_references,
         )
 
@@ -82,7 +102,7 @@ class LoadedModels:
     def info(self):
         return self._loaded_model_info
 
-    def _init_loaded_models(self, flow, storage_backend, artifact_references):
+    def _init_loaded_models(self, flow, artifact_references):
         _art_refs = []
         if type(artifact_references) == str:
             _art_refs = [(artifact_references, None)]
@@ -98,21 +118,33 @@ class LoadedModels:
         for artifact_name, path in _art_refs:
             artifact = getattr(flow, artifact_name, None)
             if artifact is None:
-                raise LoadingException(f"Artifact {artifact_name} not found in flow")
+                raise LoadingException(
+                    f"Artifact {artifact_name} not found in flow. Please check if `self.{artifact_name}` is defined in the flow"
+                )
             if (
                 type(artifact) == str
             ):  # If its a string then it means its a key reference
-                _hydrated_artifact = Factory.load_metadata_from_key(
-                    artifact, storage_backend
-                )
+                try:
+                    _hydrated_artifact = Factory.load_metadata_from_key(
+                        artifact, self._storage_backend
+                    )
+                except KeyNotFoundError:
+                    pass
+                except KeyNotCompatibleException:
+                    pass
             elif (
                 isinstance(artifact, MetaflowDataArtifactReference)
                 or type(artifact) == dict
             ):
-                _hydrated_artifact = Factory.hydrate(artifact)
+                try:
+                    _hydrated_artifact = Factory.hydrate(artifact)
+                except ValueError:
+                    raise LoadingException(
+                        f"Artifact {artifact_name} is not a valid artifact reference. Accepted types are `str`, `dict` or `MetaflowDataArtifactReference`"
+                    )
             else:
                 raise LoadingException(
-                    f"Artifact {artifact_name} is not a valid artifact reference"
+                    f"Artifact {artifact_name} is not a valid type. Accepted types are `str`, `dict` or `MetaflowDataArtifactReference`"
                 )
             _hydrated_artifacts.append((_hydrated_artifact, artifact_name, path))
 
@@ -126,11 +158,51 @@ class LoadedModels:
                 "Loading Artifact with name `%s` [type:%s] with key: %s"
                 % (artifact_name, _hydrated_artifact.TYPE, _hydrated_artifact.key)
             )
-            self._load_artifact(
-                artifact_name, _hydrated_artifact, storage_backend, path
-            )
+            self._load_artifact(artifact_name, _hydrated_artifact, path)
 
-    def _load_artifact(self, artifact_name, artifact, storage_backend, path):
+    def _add_model(self, artifact, path=None) -> str:
+        _hydrated_artifact = None
+        if type(artifact) == str:  # If its a string then it means its a key reference
+            try:
+                _hydrated_artifact = Factory.load_metadata_from_key(
+                    artifact, self._storage_backend
+                )
+            except KeyNotFoundError:
+                raise LoadingException(
+                    f"The object refering to the `reference` key string given to `current.model.load` could not be found. Reference doesn't exists in the datastore"
+                )
+            except KeyNotCompatibleException:
+                raise LoadingException(
+                    f"The object refering to the `reference` key string given to `current.model.load` is not compatible with the supported artifact types"
+                )
+        elif (
+            isinstance(artifact, MetaflowDataArtifactReference)
+            or type(artifact) == dict
+        ):
+            try:
+                _hydrated_artifact = Factory.hydrate(artifact)
+            except ValueError:
+                raise LoadingException(
+                    f"`reference` argument given to `current.model.load` is not of a valid type. Accepted types are `str`, `dict` or `MetaflowDataArtifactReference`"
+                )
+        else:
+            raise LoadingException(
+                f"`reference` argument given to `current.model.load` is not of a valid type. Accepted types are `str`, `dict` or `MetaflowDataArtifactReference`"
+            )
+        # Since `loaded_model_info` is user facing, we keep the object-key as the key instead
+        # of the hash of the key (like we do for the temp directories)
+        self._loaded_model_info[_hydrated_artifact.key] = _hydrated_artifact.to_dict()
+
+        art_key_name = safe_hash(_hydrated_artifact.key)[:6]
+        try:
+            self._load_artifact(art_key_name, _hydrated_artifact, path)
+        except LoadingException:
+            raise LoadingException(
+                f"Artifact reference specified in {_hydrated_artifact.key} not found in the datastore"
+            )
+        return self._loaded_models[art_key_name]
+
+    def _load_artifact(self, artifact_name, artifact, path):
         try:
             _hydrated_artifact = Factory.hydrate(artifact)
             if path is not None:
@@ -147,7 +219,7 @@ class LoadedModels:
             Factory.load(
                 _hydrated_artifact,
                 self._loaded_models[artifact_name],
-                storage_backend,
+                self._storage_backend,
             )
         except KeyNotFoundError:
             if self._best_effort:
@@ -175,8 +247,9 @@ class LoadedModels:
         return len(self._loaded_models)
 
     def _cleanup(self):
-        for _tempdir in self._temp_directories.values():
+        for name, _tempdir in self._temp_directories.items():
             if _tempdir is not None:
+                print("removing tempdir for model %s at %s" % (name, _tempdir.name))
                 _tempdir.cleanup()
 
 
@@ -198,7 +271,7 @@ class ModelSerializer:
         self._LOADED_MODELS = loaded_models
 
     @property
-    def loaded(self):
+    def loaded(self) -> "LoadedModels":
         return self._LOADED_MODELS
 
     def _get_model_artifact(
@@ -250,26 +323,20 @@ class ModelSerializer:
         reference: Union[str, MetaflowDataArtifactReference, dict],
         path: Optional[str] = None,
     ):
+        """
+        Load a model/checkpoint from the datastore to a temporary directory or a specified path.
+
+        Returns:
+        --------
+        str : The path to the temporary directory where the model is loaded.
+        """
 
         if reference is None:
             raise ValueError(
                 "reference arguement to `current.model.load` cannot be None"
             )
-        if path is None:
-            raise ValueError("`current.model.load` requires a path to load the model")
-
-        if reference is not None:
-            if type(reference) == dict or isinstance(
-                reference, MetaflowDataArtifactReference
-            ):
-                Factory.load(
-                    Factory.hydrate(reference),
-                    path,
-                    self._storage_backend,
-                )
-            elif type(reference) == str:
-                Factory.load_from_key(reference, path, self._storage_backend)
         # TODO [POST-RELEASE] : Implement the model_id loading
+        return self._LOADED_MODELS._add_model(reference, path)
 
 
 def _load_model(
