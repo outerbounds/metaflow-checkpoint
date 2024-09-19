@@ -189,6 +189,33 @@ class CurrentCheckpointer:
         metadata: Optional[Dict] = {},
         latest: bool = True,
     ):
+        """
+        Saves the checkpoint to the datastore.
+
+        Parameters
+        ----------
+        path : Optional[Union[str, os.PathLike]], default: None
+            The path to save the checkpoint. Accepts a file path or a directory path.
+                - If a directory path is provided, all the contents of the directory will be unpacked in a directory
+                when the checkpoint is loaded. For example if a directory `mydir` contains files `file1.txt` and `file2.txt`,
+                and a user calls `current.checkpoint.save("mydir")`, then the contents of `mydir` will be unpacked in the
+                `current.checkpoint.directory` when the checkpoint is loaded.
+                - If a file path is provided, the file will be loaded as is when the checkpoint is loaded. For example if a user
+                calls `current.checkpoint.save("file1.txt")`, then the file `file1.txt` will be loaded in the `current.checkpoint.directory`
+                when the checkpoint is loaded.
+                - If no path is provided then the `current.checkpoint.directory` will be saved as the checkpoint.
+
+        name : Optional[str], default: "mfchckpt"
+            The name of the checkpoint.
+
+        metadata : Optional[Dict], default: {}
+            Any metadata that needs to be saved with the checkpoint.
+
+        latest : bool, default: True
+            If True, the checkpoint will be marked as the latest checkpoint.
+            This will help determine if the checkpoint gets loaded when the task is restarted
+
+        """
         if path is None:
             path = self.directory
         return self._default_checkpointer.save(
@@ -231,7 +258,7 @@ class CurrentCheckpointer:
 
         This can have two meanings:
             - If the path is provided, it will load the checkpoint in the provided path
-            - If no path is providede, it will load the checkpoint in the default directory
+            - If no path is provided, it will load the checkpoint in the default directory
 
         Parameters
         ----------
@@ -294,8 +321,86 @@ def _greater_than_one_set(*args):
     return len([a for a in args if a]) > 1
 
 
-class CheckpointDecorator(StepDecorator, CardDecoratorInjector):
-    """ """
+class CheckpointDecorator(StepDecorator):
+    """
+    Enables checkpointing for a step.
+
+
+    Parameters
+    ----------
+    load_policy : str, default: "fresh"
+        The policy for loading the checkpoint. The following policies are supported:
+            - "eager": Loads the the latest available checkpoint within the namespace.
+            With this mode, the latest checkpoint written by any previous task (can be even a different run) of the step
+            will be loaded at the start of the task.
+            - "none": Do not load any checkpoint
+            - "fresh": Loads the lastest checkpoint created within the running Task.
+            This mode helps loading checkpoints across various retry attempts of the same task.
+            With this mode, no checkpoint will be loaded at the start of a task but any checkpoints
+            created within the task will be loaded when the task is retries execution on failure.
+
+    temp_dir_root : str, default: None
+        The root directory under which `current.checkpoint.directory` will be created.
+
+
+    MF Add To Current
+    -----------------
+    checkpoint -> metaflow_extensions.obcheckpoint.plugins.machine_learning_utilities.checkpoints.decorator.CurrentCheckpointer
+        The `@checkpoint` decorator makes saving/loading checkpoints available through the `current.checkpoint`.
+        The object exposes `save`/`load`/`list` methods for saving/loading checkpoints.
+
+        You can check if a checkpoint is loaded by `current.checkpoint.is_loaded` and get the checkpoint information
+        by using `current.checkpoint.info`. The `current.checkpoint.directory` returns the path to the checkpoint directory
+        where the checkpoint maybe loaded or saved.
+
+        Usage (Saving Checkpoints):
+        -------
+        ```
+        @checkpoint
+        @step
+        def train(self):
+            model = create_model(self.parameters, checkpoint_path = None)
+            for i in range(self.epochs):
+                # some training logic
+                loss = model.train(self.dataset)
+                if i % 10 == 0:
+                    model.save(
+                        current.checkpoint.directory,
+                    )
+                    # saves the contents of the `current.checkpoint.directory` as a checkpoint
+                    # and returns a reference dictionary to the checkpoint saved in the datastore
+                    self.latest_checkpoint = current.checkpoint.save(
+                        name="epoch_checkpoint",
+                        metadata={
+                            "epoch": i,
+                            "loss": loss,
+                        }
+                    )
+        ```
+        Usage (Using Loaded Checkpoints):
+        -------
+        ```
+        @retry(times=3)
+        @checkpoint
+        @step
+        def train(self):
+            # Assume that the task has restarted and the previous attempt of the task
+            # saved a checkpoint
+            checkpoint_path = None
+            if current.checkpoint.is_loaded: # Check if a checkpoint is loaded
+                print("Loaded checkpoint from the previous attempt")
+                checkpoint_path = current.checkpoint.directory
+
+            model = create_model(self.parameters, checkpoint_path = checkpoint_path)
+            for i in range(self.epochs):
+                ...
+        ```
+
+        @@ Returns
+        -------
+        CurrentCheckpointer
+            The object for handling checkpointing within a step.
+    """
 
     _task_identifier = None
 
@@ -304,7 +409,7 @@ class CheckpointDecorator(StepDecorator, CardDecoratorInjector):
     defaults = {
         # `load_policy` defines the policy for the checkpoint loading during the execution of different runs.
         # It can be : ["eager", "none", "fresh"],
-        "load_policy": None,  #
+        "load_policy": "fresh",  #
         "temp_dir_root": None,  # Root directory for the temporary checkpoint directory.
     }
 
@@ -324,6 +429,7 @@ class CheckpointDecorator(StepDecorator, CardDecoratorInjector):
     def step_init(
         self, flow, graph, step_name, decorators, environment, flow_datastore, logger
     ):
+        self.deco_injector = CardDecoratorInjector()
         if (
             self.attributes["load_policy"] is not None
             and self.attributes["load_policy"] not in self.LOAD_POLCIES
@@ -342,7 +448,7 @@ class CheckpointDecorator(StepDecorator, CardDecoratorInjector):
         self._flow_datastore = flow_datastore
         self._logger = logger
 
-        self.attach_card_decorator(
+        self.deco_injector.attach_card_decorator(
             flow,
             step_name,
             CheckpointListRefresher.CARD_ID,
