@@ -3,7 +3,11 @@ import tempfile
 from typing import Dict, List, Optional, Tuple, Union
 
 
-from ..exceptions import KeyNotFoundError
+from ..exceptions import (
+    KeyNotFoundError,
+    KeyNotCompatibleException,
+    IncompatibleObjectTypeException,
+)
 from .model_storage import ModelDatastore
 from .exceptions import LoadingException
 from ..datastore.utils import safe_serialize
@@ -129,9 +133,14 @@ class LoadedModels:
                         artifact, self._storage_backend
                     )
                 except KeyNotFoundError:
-                    pass
+                    raise LoadingException(
+                        "Artifact %s not found in the datastore" % artifact_name
+                    )
                 except KeyNotCompatibleException:
-                    pass
+                    raise LoadingException(
+                        "Artifact %s not compatible with any of the supported objects"
+                        % artifact_name
+                    )
             elif (
                 isinstance(artifact, MetaflowDataArtifactReference)
                 or type(artifact) == dict
@@ -140,11 +149,13 @@ class LoadedModels:
                     _hydrated_artifact = Factory.hydrate(artifact)
                 except ValueError:
                     raise LoadingException(
-                        f"Artifact {artifact_name} is not a valid artifact reference. Accepted types are `str`, `dict` or `MetaflowDataArtifactReference`"
+                        "Artifact %s is not a valid artifact reference. Accepted types are `str`, `dict` or `MetaflowDataArtifactReference`"
+                        % artifact_name
                     )
             else:
                 raise LoadingException(
-                    f"Artifact {artifact_name} is not a valid type. Accepted types are `str`, `dict` or `MetaflowDataArtifactReference`"
+                    f"Artifact %s is not a valid type. Accepted types are `str`, `dict` or `MetaflowDataArtifactReference`"
+                    % artifact_name
                 )
             _hydrated_artifacts.append((_hydrated_artifact, artifact_name, path))
 
@@ -169,11 +180,11 @@ class LoadedModels:
                 )
             except KeyNotFoundError:
                 raise LoadingException(
-                    f"The object refering to the `reference` key string given to `current.model.load` could not be found. Reference doesn't exists in the datastore"
+                    f"`reference` argument string given to `current.model.load` could not be found. Reference doesn't exists in the datastore"
                 )
             except KeyNotCompatibleException:
                 raise LoadingException(
-                    f"The object refering to the `reference` key string given to `current.model.load` is not compatible with the supported artifact types"
+                    f"`reference` argument string given to `current.model.load` is not compatible with the supported artifact types"
                 )
         elif (
             isinstance(artifact, MetaflowDataArtifactReference)
@@ -181,7 +192,7 @@ class LoadedModels:
         ):
             try:
                 _hydrated_artifact = Factory.hydrate(artifact)
-            except ValueError:
+            except (ValueError, IncompatibleObjectTypeException):
                 raise LoadingException(
                     f"`reference` argument given to `current.model.load` is not of a valid type. Accepted types are `str`, `dict` or `MetaflowDataArtifactReference`"
                 )
