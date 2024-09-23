@@ -71,6 +71,9 @@ class HuggingfaceRegistry:
                 "registry": "huggingface",
                 "repo_type": repo_type,
             },
+            # We set this statically to files here because
+            # it will be a lot more performant than tar mode.
+            storage_format="files",
         )
         self._warn(
             "huggingface checkpoint for %s saved" % repo_name,

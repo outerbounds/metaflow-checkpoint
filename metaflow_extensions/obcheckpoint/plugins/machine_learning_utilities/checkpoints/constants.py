@@ -1,3 +1,5 @@
+from ..datastore.core import STORAGE_FORMATS
+
 DEFAULT_NAME = "mfchckpt"
 MAX_HASH_LEN = 12
 CHECKPOINTS_STORAGE_PREFIX = "mf.checkpoints"
@@ -8,3 +10,5 @@ TASK_CHECKPOINTS_ARTIFACT_NAME = "_task_checkpoints"
 TASK_LATEST_CHECKPOINT_ARTIFACT_NAME = "_task_latest_checkpoint"
 
 CHECKPOINT_TAG_PREFIX = "checkpoint:"
+
+DEFAULT_STORAGE_FORMAT = STORAGE_FORMATS.FILES

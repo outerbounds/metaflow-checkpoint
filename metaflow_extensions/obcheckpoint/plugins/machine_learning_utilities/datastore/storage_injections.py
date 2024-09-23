@@ -12,6 +12,24 @@ import shutil
 import os
 
 
+def save_files_s3(self, key_path_tuples, overwrite=False):
+    with S3(
+        s3root=self.datastore_root,
+        tmproot=ARTIFACT_LOCALROOT,
+        external_client=self.s3_client,
+    ) as s3:
+        s3.put_files(
+            [
+                S3PutObject(
+                    key=key,
+                    path=path,
+                )
+                for key, path in key_path_tuples
+            ],
+            overwrite=overwrite,
+        )
+
+
 def save_file_s3(self, key, path, overwrite=False):
     with S3(
         s3root=self.datastore_root,
@@ -27,6 +45,21 @@ def save_file_s3(self, key, path, overwrite=False):
             ],
             overwrite=overwrite,
         )
+
+
+@handle_executor_exceptions
+def save_files_gcp_or_azure(self, key_path_tuples, overwrite=False):
+    futures = []
+    for key, path in key_path_tuples:
+        futures.append(
+            self._executor.submit(
+                self.root_client.save_bytes_single,
+                (key, path, {"save_file_single": True}),
+                overwrite=overwrite,
+            )
+        )
+    for future in as_completed(futures):
+        future.result()
 
 
 @handle_executor_exceptions
@@ -52,9 +85,21 @@ def save_file_local(self, key, path, overwrite=False):
     shutil.copy(path, full_path)
 
 
-STORAGE_INJECTIONS = {
+def save_files_local(self, key_path_tuples, overwrite=False):
+    for key, path in key_path_tuples:
+        save_file_local(self, key, path, overwrite=overwrite)
+
+
+STORAGE_INJECTIONS_SINGLE_FILE_SAVE = {
     "s3": save_file_s3,
     "gs": save_file_gcp_or_azure,
     "azure": save_file_gcp_or_azure,
     "local": save_file_local,
+}
+
+STORAGE_INJECTIONS_MULTIPLE_FILE_SAVE = {
+    "s3": save_files_s3,
+    "gs": save_files_gcp_or_azure,
+    "azure": save_files_gcp_or_azure,
+    "local": save_files_local,
 }

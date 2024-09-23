@@ -255,7 +255,12 @@ class CheckpointArtifact(MetaflowDataArtifactReference):
         "metadata": dict,
         "name": str,
         "version_id": str,
+        "storage_format": str,
     }
+
+    @property
+    def storage_format(self):
+        return self._values.get("storage_format", None)
 
     @property
     def version_id(self):
@@ -270,6 +275,9 @@ class CheckpointArtifact(MetaflowDataArtifactReference):
 
     def _load(self, storage_backend, local_path):
         # TODO [POST RELEASE]: Check if we can move this somewhere else.
+        # TODO : The connective tissue with checkpointer is not designed optimally.
+        # Need to fix the design of checkpointer and constructors to figure
+        # the best means of using the abstractions.
         from .checkpoints.core import Checkpointer
 
         _checkpointer = Checkpointer._from_checkpoint_and_storage_backend(
@@ -279,6 +287,7 @@ class CheckpointArtifact(MetaflowDataArtifactReference):
             local_path=local_path,
             version_id=self.version_id,
             name=self.name,
+            storage_format=self.storage_format,
         )
 
     @classmethod

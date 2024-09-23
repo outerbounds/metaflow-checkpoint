@@ -74,21 +74,31 @@ def _load_checkpoint_from_reference(
     checkpoint: Union[CheckpointArtifact, dict],  # User Facing
     local_path: str,  # User Facing
 ):
+    _chckpt = CheckpointArtifact.hydrate(checkpoint)
     # this will already set the version on the checkpointer.
-    _checkpointer = Checkpointer._from_checkpoint(checkpoint)
-    _name = CheckpointArtifact.hydrate(checkpoint).name
+    _checkpointer = Checkpointer._from_checkpoint(_chckpt)
+    _name = _chckpt.name
     version = _checkpointer.current_version
-    _checkpointer._load_checkpoint(local_path, version_id=version, name=_name)
+    _checkpointer._load_checkpoint(
+        local_path,
+        version_id=version,
+        name=_name,
+        storage_format=_chckpt.storage_format,
+    )
 
 
 def _load_checkpoint_from_key(
     checkpoint_key: str,
     local_path: str,
 ):
-    _checkpointer = Checkpointer._from_key(checkpoint_key)
-    key_decomp = _checkpointer._checkpoint_datastore.decompose_key(checkpoint_key)
+    _object = CheckpointArtifact._load_metadata_from_key(checkpoint_key, None)
+    _checkpointer = Checkpointer._from_checkpoint(_object)
+
     _checkpointer._load_checkpoint(
-        local_path, version_id=key_decomp.version_id, name=key_decomp.name
+        local_path,
+        version_id=_object.version_id,
+        name=_object.name,
+        storage_format=_object.storage_format,
     )
 
 

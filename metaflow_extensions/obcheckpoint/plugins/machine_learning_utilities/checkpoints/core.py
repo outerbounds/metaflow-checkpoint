@@ -21,6 +21,7 @@ from .constants import (
     MAX_HASH_LEN,
     DEFAULT_NAME,
     CHECKPOINT_UID_ENV_VAR_NAME,
+    DEFAULT_STORAGE_FORMAT,
 )
 
 if TYPE_CHECKING:
@@ -42,9 +43,8 @@ def _coalesce_lambdas(*args):
 
 
 class Checkpointer:
-    """
-    Core class responsible fore listing/writing/loading checkpoints
-    """
+    # TODO : this abstraction is not as well designed as it should be
+    # TODO : Figure better abstraction interplay.
 
     _checkpoint_uid: str
 
@@ -84,15 +84,21 @@ class Checkpointer:
         )
 
     def save(
-        self, paths: Union[str, List[str]], metadata={}, latest=True, name=DEFAULT_NAME
+        self,
+        path: str,
+        metadata={},
+        latest=True,
+        name=DEFAULT_NAME,
+        storage_format=DEFAULT_STORAGE_FORMAT,
     ) -> CheckpointArtifact:
         _art = self._checkpoint_datastore.save(
-            paths,
+            path,
             attempt=self._attempt,
             version_id=self._current_version,
             name=name,
             metadata=metadata,
             set_latest=latest,
+            storage_format=storage_format,
         )
         self._update_version()
         return _art
@@ -139,13 +145,18 @@ class Checkpointer:
         return obj
 
     def _load_checkpoint(
-        self, local_path: str, version_id: int = None, name=DEFAULT_NAME
+        self,
+        local_path: str,
+        version_id: int = None,
+        name=DEFAULT_NAME,
+        storage_format=None,  # Loading should require an explicit format
     ):
         self._checkpoint_datastore.load(
             local_path,
             version_id=version_id,
             attempt=self._attempt,
             name=name,
+            storage_format=storage_format,
         )
 
     def _list_checkpoints(

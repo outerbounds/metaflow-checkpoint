@@ -26,6 +26,7 @@ from .constants import (
     CHECKPOINT_UID_ENV_VAR_NAME,
     TASK_CHECKPOINTS_ARTIFACT_NAME,
     TASK_LATEST_CHECKPOINT_ARTIFACT_NAME,
+    DEFAULT_STORAGE_FORMAT,
 )
 
 # from .cards import CardDecoratorInjector, create_checkpoint_card, null_card
@@ -188,6 +189,7 @@ class CurrentCheckpointer:
         name: Optional[str] = DEFAULT_NAME,
         metadata: Optional[Dict] = {},
         latest: bool = True,
+        storage_format: str = DEFAULT_STORAGE_FORMAT,
     ):
         """
         Saves the checkpoint to the datastore.
@@ -196,13 +198,12 @@ class CurrentCheckpointer:
         ----------
         path : Optional[Union[str, os.PathLike]], default: None
             The path to save the checkpoint. Accepts a file path or a directory path.
-                - If a directory path is provided, all the contents of the directory will be unpacked in a directory
-                when the checkpoint is loaded. For example if a directory `mydir` contains files `file1.txt` and `file2.txt`,
-                and a user calls `current.checkpoint.save("mydir")`, then the contents of `mydir` will be unpacked in the
-                `current.checkpoint.directory` when the checkpoint is loaded.
-                - If a file path is provided, the file will be loaded as is when the checkpoint is loaded. For example if a user
-                calls `current.checkpoint.save("file1.txt")`, then the file `file1.txt` will be loaded in the `current.checkpoint.directory`
-                when the checkpoint is loaded.
+                - If a directory path is provided, all the contents within that directory will be saved.
+                When a checkpoint is reloaded during task retries, `the current.checkpoint.directory` will
+                contain the contents of this directory.
+                - If a file path is provided, the file will be directly saved to the datastore (with the same filename).
+                When the checkpoint is reloaded during task retries, the file with the same name will be available in the
+                `current.checkpoint.directory`.
                 - If no path is provided then the `current.checkpoint.directory` will be saved as the checkpoint.
 
         name : Optional[str], default: "mfchckpt"
@@ -213,13 +214,21 @@ class CurrentCheckpointer:
 
         latest : bool, default: True
             If True, the checkpoint will be marked as the latest checkpoint.
-            This will help determine if the checkpoint gets loaded when the task is restarted
+            This helps determine if the checkpoint gets loaded when the task restarts.
+
+        storage_format : str, default: files
+            If `tar`, the contents of the directory will be tarred before saving to the datastore.
+            If `files`, saves directory directly to the datastore.
 
         """
         if path is None:
             path = self.directory
         return self._default_checkpointer.save(
-            path=path, name=name, metadata=metadata, latest=latest
+            path=path,
+            name=name,
+            metadata=metadata,
+            latest=latest,
+            storage_format=storage_format,
         )
 
     def list(

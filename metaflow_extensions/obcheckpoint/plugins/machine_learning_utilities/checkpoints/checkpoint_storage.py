@@ -2,11 +2,16 @@ import os
 from typing import Callable, Generator, Iterator, List, Optional, Union
 
 from metaflow.datastore.datastore_storage import DataStoreStorage
-from .constants import DEFAULT_NAME, CHECKPOINTS_STORAGE_PREFIX
+from .constants import DEFAULT_NAME, CHECKPOINTS_STORAGE_PREFIX, DEFAULT_STORAGE_FORMAT
 from ..exceptions import KeyNotCompatibleWithObjectException
 from ..utils.identity_utils import pathspec_hash
 from ..utils.general import replace_start_and_end_slash
-from ..datastore.core import allow_safe, DatastoreInterface, ObjectStorage
+from ..datastore.core import (
+    allow_safe,
+    DatastoreInterface,
+    ObjectStorage,
+    STORAGE_FORMATS,
+)
 from ..datastore.exceptions import (
     DatastoreReadInitException,
     DatastoreWriteInitException,
@@ -222,6 +227,12 @@ class CheckpointDatastore(DatastoreInterface):
 
     pathspec = None
 
+    STORAGE_FORMATS = [
+        STORAGE_FORMATS.TAR,
+        STORAGE_FORMATS.FILES
+        # can add more as needed.
+    ]
+
     @property
     def metadata_ready(self):
         return self.metadata_store is not None
@@ -352,12 +363,13 @@ class CheckpointDatastore(DatastoreInterface):
 
     def save(
         self,
-        local_paths: Union[str, List[str]],
+        local_path: str,
         attempt,
         version_id,
         name=DEFAULT_NAME,
         metadata={},
         set_latest=True,
+        storage_format=DEFAULT_STORAGE_FORMAT,
     ) -> CheckpointArtifact:
 
         if not (self.artifact_ready and self.metadata_ready):
@@ -373,10 +385,23 @@ class CheckpointDatastore(DatastoreInterface):
             # AT Write TIME pathspec hash is AlWAYS RESOLVABLE
             # because `metadata_store` is ALWAYS SET
         )
-        full_checkpoint_url, key_path, file_size = self.artifact_store._save_tarball(
+
+        _storage_func = None
+        if storage_format == STORAGE_FORMATS.FILES:
+            _storage_func = self.artifact_store._save_objects
+        elif storage_format == STORAGE_FORMATS.TAR:
+            _storage_func = self.artifact_store._save_tarball
+        else:
+            raise ValueError(
+                "Invalid storage format. Expected one of %s got %s"
+                % (self.STORAGE_FORMATS, storage_format)
+            )
+
+        (full_checkpoint_url, key_path, file_size,) = _storage_func(
             _key,
-            local_paths,
+            local_path,
         )
+
         _metadata = dict(
             size=file_size,
             pathspec=self.pathspec,
@@ -388,7 +413,7 @@ class CheckpointDatastore(DatastoreInterface):
             name=name,
             created_on=datetime.now().isoformat(),
             metadata=safe_serialize(metadata),
-            storage_format="tar",
+            storage_format=storage_format,
             creation_context="task",
             version_id=version_id,
         )
@@ -441,6 +466,7 @@ class CheckpointDatastore(DatastoreInterface):
         version_id,
         attempt,
         name,
+        storage_format=DEFAULT_STORAGE_FORMAT,
     ):
         if not self.artifact_ready:
             raise ValueError("Datastore is not ready to load")
@@ -450,7 +476,15 @@ class CheckpointDatastore(DatastoreInterface):
             name,
             version_id,
         )
-        return self.artifact_store._load_tarball(_key, local_path)
+        _load_func = None
+        if storage_format == "tar":
+            return self.artifact_store._load_tarball(_key, local_path)
+        elif storage_format == "files":
+            return self.artifact_store._load_objects(_key, local_path)
+        raise ValueError(
+            "Invalid storage format. Expected one of %s got %s"
+            % (self.STORAGE_FORMATS, storage_format)
+        )
 
     def load_metadata(
         self,

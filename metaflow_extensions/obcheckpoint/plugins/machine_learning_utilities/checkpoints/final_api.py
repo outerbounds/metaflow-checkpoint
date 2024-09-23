@@ -5,6 +5,7 @@ from .constants import (
     CHECKPOINT_UID_ENV_VAR_NAME,
     DEFAULT_NAME,
     TASK_CHECKPOINTS_ARTIFACT_NAME,
+    DEFAULT_STORAGE_FORMAT,
 )
 from .constructors import (
     _instantiate_checkpoint,
@@ -57,20 +58,42 @@ class Checkpoint:
     def _set_checkpointer(self, checkpointer: "Checkpointer"):
         self._checkpointer = checkpointer
 
-    def save(self, path=None, metadata=None, latest=True, name=DEFAULT_NAME):
+    def save(
+        self,
+        path=None,
+        metadata=None,
+        latest=True,
+        name=DEFAULT_NAME,
+        storage_format=DEFAULT_STORAGE_FORMAT,
+    ):
         """
-        saves the checkpoint to the datastore (resemble's a create op)
+        Saves the checkpoint to the datastore
 
         Parameters
         ----------
+        path : Optional[Union[str, os.PathLike]], default: None
+            The path to save the checkpoint. Accepts a file path or a directory path.
+                - If a directory path is provided, all the contents within that directory will be saved.
+                When a checkpoint is reloaded during task retries, `the current.checkpoint.directory` will
+                contain the contents of this directory.
+                - If a file path is provided, the file will be directly saved to the datastore (with the same filename).
+                When the checkpoint is reloaded during task retries, the file with the same name will be available in the
+                `current.checkpoint.directory`.
+                - If no path is provided then the `Checkpoint.directory` will be saved as the checkpoint.
 
-        - `path` (str or os.PathLike):
-            - path to directory
-            - path to file
-        - `name`:
-            - name of the checkpoint
-        - `metadata`:
-            - metadata of the checkpoint
+        name : Optional[str], default: "mfchckpt"
+            The name of the checkpoint.
+
+        metadata : Optional[Dict], default: {}
+            Any metadata that needs to be saved with the checkpoint.
+
+        latest : bool, default: True
+            If True, the checkpoint will be marked as the latest checkpoint.
+            This helps determine if the checkpoint gets loaded when the task restarts.
+
+        storage_format : str, default: files
+            If `tar`, the contents of the directory will be tarred before saving to the datastore.
+            If `files`, saves directory directly to the datastore.
         """
         if path is None and self.directory is None:
             raise ValueError(
@@ -83,7 +106,11 @@ class Checkpoint:
         if metadata is None:
             metadata = {}
         return self._checkpointer.save(
-            paths=path, name=name, metadata=metadata, latest=latest
+            path=path,
+            name=name,
+            metadata=metadata,
+            latest=latest,
+            storage_format=storage_format,
         ).to_dict()
 
     def __enter__(self):
@@ -116,7 +143,6 @@ class Checkpoint:
         ```python
 
         Checkpoint().list(name="best") # lists checkpoints in the current task with the name "best"
-        Checkpoint().list(name="best", task="anotherflow/somerunid/somestep/sometask") # lists checkpoints in the another task with the name "best"
         Checkpoint().list(task="anotherflow/somerunid/somestep/sometask", name="best") # Identical as the above one but
         Checkpoint().list() # lists all the checkpoints in the current task
 

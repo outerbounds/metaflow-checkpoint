@@ -90,7 +90,7 @@ def create_tarball_in_memory(
 
 
 def create_tarball_on_disk(
-    source_paths: Union[str, List[str]],
+    source_path: str,
     output_filename=None,
     compression_method="gz",
     strict=False,
@@ -99,11 +99,11 @@ def create_tarball_on_disk(
     Create a tarball of the specified file or directory.
 
     Parameters:
-    - source_paths: The path to the files or directories to add to tarball.
+    - source_path: The path to the file or directory to add to tarball.
     - output_filename: The path where the tarball should be saved.
     """
 
-    _paths, _arcnames = _prepare_arc_names_and_sources(source_paths)
+    _paths, _arcnames = _prepare_arc_names_and_sources(source_path)
     write_string = "w"
     if compression_method is not None:
         write_string = "w:%s" % compression_method
@@ -121,10 +121,11 @@ def _resolve_arc_name(_paths: List[str]):
         # Assume we pass only the `path/to/my-directory` to `create_tarball` method.
         # At this point the base name of the directory is `my-directory` and if we use that
         # as the arcname, then when we extract the tarball, we will have all contents under
-        # `/extraction-path/directory`.
+        # `/extraction-path/my-directory`. We don't want this since we want what ever contents
+        # within `my-directory` to be directly under `/extraction-path`.
 
-        # To avoid this in such simple cases, we set the arcname to an empty string such
-        # that when we extract the tarball we will have all contents of `directory` under `/extraction-path`.
+        # To avoid this, we set the arcname to an empty string such
+        # that when we extract the tarball we will have all contents of `my-directory` under `/extraction-path`.
         # the os.path.basename is not a problem for files since files don't have a root directory.
 
         if os.path.isdir(_paths[0]):

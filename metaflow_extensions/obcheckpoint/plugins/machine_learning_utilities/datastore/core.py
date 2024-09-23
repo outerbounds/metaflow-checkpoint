@@ -4,6 +4,7 @@ from metaflow.plugins.datastores.local_storage import LocalStorage
 import os
 from functools import partial
 import sys
+import shutil
 
 from typing import Iterator, List, Union, Tuple, Optional
 import os
@@ -15,7 +16,10 @@ import tempfile
 
 from ..utils.tar_utils import create_tarball_on_disk, extract_tarball
 from ..utils.general import safe_serialize
-from .storage_injections import STORAGE_INJECTIONS
+from .storage_injections import (
+    STORAGE_INJECTIONS_SINGLE_FILE_SAVE,
+    STORAGE_INJECTIONS_MULTIPLE_FILE_SAVE,
+)
 from ..exceptions import KeyNotFoundError
 import json
 
@@ -23,6 +27,11 @@ import json
 DatastoreBlob = namedtuple("DatastoreBlob", "blob url path")
 ListPathResult = namedtuple("ListPathResult", "full_url key")
 COMPRESSION_METHOD = None
+
+
+class STORAGE_FORMATS:
+    TAR = "tar"
+    FILES = "files"
 
 
 def warning_message(
@@ -52,6 +61,33 @@ def allow_safe(func):
             raise e
 
     return wrapper
+
+
+def _extract_paths_inside_directory(directory):
+    """
+    This function will extract all the file-paths inside a directory
+    and returns the following:
+        - A list of relative paths of the files inside the directory
+        - The total size of the directory in bytes.
+        - The absolute paths of the files inside the directory.
+    """
+    import os
+
+    relative_paths = []
+    absolute_paths = []
+    total_size = 0
+
+    directory = os.path.abspath(directory)
+
+    for root, dirs, files in os.walk(directory):
+        for file in files:
+            abs_path = os.path.join(root, file)
+            rel_path = os.path.relpath(abs_path, directory)
+            relative_paths.append(rel_path)
+            absolute_paths.append(abs_path)
+            total_size += os.path.getsize(abs_path)
+
+    return relative_paths, total_size, absolute_paths
 
 
 class ObjectStorage(object):
@@ -104,14 +140,22 @@ class ObjectStorage(object):
         based on the storage backend.
         """
 
-        if self._backend.TYPE not in STORAGE_INJECTIONS:
+        if self._backend.TYPE not in STORAGE_INJECTIONS_SINGLE_FILE_SAVE:
             raise NotImplementedError(
                 "Storage backend %s not supported with @checkpoint."
                 % self._backend.TYPE
             )
 
-        method = STORAGE_INJECTIONS[self._backend.TYPE]
+        method = STORAGE_INJECTIONS_SINGLE_FILE_SAVE[self._backend.TYPE]
         setattr(self._backend, "save_file", partial(method, self._backend))
+
+        if self._backend.TYPE not in STORAGE_INJECTIONS_MULTIPLE_FILE_SAVE:
+            raise NotImplementedError(
+                "Storage backend %s not supported with @checkpoint."
+                % self._backend.TYPE
+            )
+        method = STORAGE_INJECTIONS_MULTIPLE_FILE_SAVE[self._backend.TYPE]
+        setattr(self._backend, "save_files", partial(method, self._backend))
 
     def set_full_prefix(self, root_prefix):
         self.FULL_PREFIX = os.path.join(root_prefix, "/".join(self._path_components))
@@ -192,7 +236,13 @@ class ObjectStorage(object):
         )
         return self.resolve_key_relative_path(key)
 
+    def put_file(self, key: str, path: str, overwrite=False):
+        _kp = self.resolve_key_path(key)
+        self._backend.save_file(_kp, path, overwrite=overwrite)
+        return self.resolve_key_relative_path(key)
+
     def put_files(self, key_paths: List[Tuple[str, str]], overwrite=False):
+
         results = []
         for key, path in key_paths:
             _kp = self.resolve_key_path(key)
@@ -248,25 +298,98 @@ class ObjectStorage(object):
                 key=_relative_url_convert(list_content_result.path),
             )
 
+    def _save_objects(
+        self,
+        key: str,
+        local_path: str,
+    ):
+        # this function will just store all the objects as is to the datastore without taring them
+        # up. This is useful when we are storing a single file or a directory that doesn't need to be
+        # tarred up.
+        object_size = None
+        relative_paths_inside_key = []
+        absolute_paths_of_files = []
+        if os.path.isdir(local_path):
+            (
+                relative_paths_inside_key,
+                object_size,
+                absolute_paths_of_files,
+            ) = _extract_paths_inside_directory(local_path)
+        else:
+            object_size = os.path.getsize(local_path)
+            relative_paths_inside_key.append(
+                os.path.basename(local_path),
+            )
+            absolute_paths_of_files.append(local_path)
+
+        # at this point, since we already have a key, we need to ensure that we are placing everything
+        # under the key. This is because the key will be used as the identifier and we will end up extracting
+        # the contents of the object inside the key to the local path.
+        key_paths = [
+            (self.resolve_key_path(os.path.join(key, rel_path)), abs_path)
+            for rel_path, abs_path in zip(
+                relative_paths_inside_key, absolute_paths_of_files
+            )
+        ]
+        self._backend.save_files(key_paths, overwrite=True)
+        return (
+            self.resolve_key_full_url(key),
+            self.resolve_key_relative_path(key),
+            object_size,
+        )
+
     def _save_tarball(
         self,
         key,
-        local_paths: Union[str, List[str]],
+        local_path: str,
     ):
         suffix = ".tar"
         with tempfile.NamedTemporaryFile(suffix=suffix) as temp_file:
             create_tarball_on_disk(
-                local_paths,
+                local_path,
                 output_filename=temp_file.name,
                 compression_method=None,
             )
             file_size = os.path.getsize(temp_file.name)
-            _ = self.put_files([(key, temp_file.name)], overwrite=True)
+            _ = self.put_file(key, temp_file.name, overwrite=True)
             return (
                 self.resolve_key_full_url(key),
                 self.resolve_key_relative_path(key),
                 file_size,
             )
+
+    def _load_objects(
+        self,
+        key,
+        # The key here is ideally a key from the datastore that we want to load
+        # This can be a checkpoint key or a model key.
+        local_directory,
+        # Its assumed here that the local path where everything is getting
+        # extracted is a directory.
+    ):
+        list_path_results = list(self.list_paths([key]))
+        keys = [p.key for p in list_path_results]
+        # We directly call load bytes here because `self.get_file` will add the root of the datastore
+        # to the path and we don't want that.
+        with self._backend.load_bytes(keys) as get_results:
+            for list_key, path, meta in get_results:
+                if path is None:
+                    raise KeyNotFoundError(key)
+
+                path_within_dir = os.path.relpath(list_key, self.resolve_key_path(key))
+                # We need to construct the right path over here based on the
+                # where the key is present in the object.
+                # Figure a relative path from the end of the key
+                # to the actual file/directory within it.
+                # We do this because we want the entire directory structure
+                # to be preserved when we download the objects on local.
+                shutil.move(
+                    path,
+                    os.path.join(local_directory, path_within_dir),
+                )
+        # for list_path_result in self.list_paths([key]):
+
+        return local_directory
 
     def _load_tarball(
         self,
