@@ -1,12 +1,40 @@
 import hashlib
+import time
 import shutil
 from ..checkpoints.decorator import (
     CheckpointDecorator,
     CurrentCheckpointer,
     warning_message,
 )
+import sys
 
 HUGGINGFACE_HUB_ROOT_PREFIX = "mf.huggingface_hub"
+
+
+def get_tqdm_class():
+    from tqdm.std import tqdm as std_tqdm
+
+    class TqdmExt(std_tqdm):
+        def __init__(self, *args, **kwargs):
+            kwargs["file"] = sys.stdout
+            kwargs["desc"] = (
+                "[@huggingface_hub][HF-Download]"
+                if not kwargs.get("desc", None)
+                else "[@huggingface_hub][HF-Download] " + kwargs["desc"]
+            )
+            kwargs["leave"] = False
+            super().__init__(*args, **kwargs)
+
+    return TqdmExt
+
+
+def show_progress():
+    import logging
+    from tqdm.contrib.logging import tqdm_logging_redirect
+
+    tqdm_logger = logging.getLogger("tqdm")
+    tqdm_logger.setLevel(logging.INFO)
+    return tqdm_logging_redirect()
 
 
 def download_model_from_huggingface(**kwargs):
@@ -15,8 +43,9 @@ def download_model_from_huggingface(**kwargs):
     import os
 
     try:
-        huggingface_hub.snapshot_download(**kwargs)
-        pass
+        kwargs.pop("tqdm_class", None)
+        with show_progress():
+            huggingface_hub.snapshot_download(**kwargs, tqdm_class=get_tqdm_class())
     except Exception as e:
         raise e
 
@@ -57,12 +86,17 @@ class HuggingfaceRegistry:
         _kwargs = kwargs.copy()
         _kwargs["local_dir"] = self._checkpointer.directory
         _kwargs["local_dir_use_symlinks"] = False
+        start_time = time.time()
         self._warn(
-            "Downloading %s from huggingface" % repo_name,
+            "Downloading %s from huggingface to path %s"
+            % (repo_name, _kwargs["local_dir"]),
         )
         download_model_from_huggingface(**_kwargs)
+        download_completion_time = time.time()
+        download_time = str(round(download_completion_time - start_time, 2))
         self._warn(
-            "Downloaded %s from huggingface. Saving checkpoint" % repo_name,
+            "Downloaded %s from huggingface in %s seconds. Saving checkpoint to datastore."
+            % (repo_name, download_time),
         )
         chckpt_ref = self._checkpointer.save(
             name=chckpt_name,
@@ -75,8 +109,10 @@ class HuggingfaceRegistry:
             # it will be a lot more performant than tar mode.
             storage_format="files",
         )
+        _save_time = str(round(time.time() - download_completion_time, 2))
         self._warn(
-            "huggingface checkpoint for %s saved" % repo_name,
+            "huggingface checkpoint for %s saved to datastore in %s seconds"
+            % (repo_name, _save_time),
         )
         # wipe the directory so that it's unpolluted for another function call.
         shutil.rmtree(self._checkpointer.directory)
@@ -100,6 +136,11 @@ class HuggingfaceRegistry:
 class HuggingfaceHubDecorator(CheckpointDecorator):
     """
     Decorator that helps cache, version and store models/datasets from huggingface hub.
+
+    Parameters
+    ----------
+    temp_dir_root : str, optional
+        The root directory that will hold the temporary directory where objects will be downloaded.
 
     MF Add To Current
     -----------------
@@ -132,7 +173,7 @@ class HuggingfaceHubDecorator(CheckpointDecorator):
         ```
     """
 
-    defaults = {}
+    defaults = {"temp_dir_root": None}
 
     name = "huggingface_hub"
 
@@ -146,7 +187,10 @@ class HuggingfaceHubDecorator(CheckpointDecorator):
         self._registry = HuggingfaceRegistry(logger)
 
     def _resolve_settings(self):
-        return {"scope": "namespace", "load_policy": "none"}
+        return {
+            "load_policy": "none",
+            "temp_dir_root": self.attributes.get("temp_dir_root"),
+        }
 
     def task_pre_step(
         self,

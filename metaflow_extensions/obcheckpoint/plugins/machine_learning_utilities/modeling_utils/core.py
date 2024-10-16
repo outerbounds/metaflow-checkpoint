@@ -1,4 +1,5 @@
 import os
+import time
 import tempfile
 from typing import Dict, List, Optional, Tuple, Union
 
@@ -16,6 +17,7 @@ from ..utils.identity_utils import MAX_HASH_LEN, safe_hash
 from ..utils.serialization_handler import TarHandler, SERIALIZATION_HANDLERS
 from ..datastructures import ModelArtifact, Factory, MetaflowDataArtifactReference
 from uuid import uuid4
+import shutil
 
 OBJECT_MAX_SIZE_ALLOWED_FOR_ARTIFACT = unit_convert(3, "GB", "B")
 
@@ -169,7 +171,16 @@ class LoadedModels:
                 "Loading Artifact with name `%s` [type:%s] with key: %s"
                 % (artifact_name, _hydrated_artifact.TYPE, _hydrated_artifact.key)
             )
+            start_time = time.time()
             self._load_artifact(artifact_name, _hydrated_artifact, path)
+            end_time = time.time()
+            self._warn(
+                "Loaded artifact `%s` in %s seconds"
+                % (
+                    artifact_name + "[type:%s]" % _hydrated_artifact.TYPE,
+                    str(round(end_time - start_time, 2)),
+                )
+            )
 
     def _add_model(self, artifact, path=None) -> str:
         _hydrated_artifact = None
@@ -206,7 +217,16 @@ class LoadedModels:
 
         art_key_name = safe_hash(_hydrated_artifact.key)[:6]
         try:
+            start_time = time.time()
             self._load_artifact(art_key_name, _hydrated_artifact, path)
+            end_time = time.time()
+            self._warn(
+                "Loaded artifact `%s` in %s seconds"
+                % (
+                    art_key_name + "[type:%s]" % _hydrated_artifact.TYPE,
+                    str(round(end_time - start_time, 2)),
+                )
+            )
         except LoadingException:
             raise LoadingException(
                 f"Artifact reference specified in {_hydrated_artifact.key} not found in the datastore"
@@ -220,13 +240,20 @@ class LoadedModels:
                 os.makedirs(path, exist_ok=True)
                 self._loaded_models[artifact_name] = path
             else:
+                # Ensure that if a tempdir root path is provided and nothing
+                # exists then we end up creating that path. This helps ensure
+                # that rouge paths with arbirary Filesystems get created before
+                # temp dirs exists.
+                if self._temp_dir_root is not None:
+                    if not os.path.exists(self._temp_dir_root):
+                        os.makedirs(self._temp_dir_root, exist_ok=True)
+
                 self._temp_directories[artifact_name] = tempfile.TemporaryDirectory(
                     dir=self._temp_dir_root, prefix=f"metaflow_models_{artifact_name}_"
                 )
                 self._loaded_models[artifact_name] = self._temp_directories[
                     artifact_name
                 ].name
-
             Factory.load(
                 _hydrated_artifact,
                 self._loaded_models[artifact_name],
@@ -257,10 +284,24 @@ class LoadedModels:
     def __len__(self):
         return len(self._loaded_models)
 
+    def cleanup(self, artifact_name):
+        if artifact_name not in self._loaded_models:
+            raise KeyError(f"Model {artifact_name} not found in loaded models")
+
+        if artifact_name in self._temp_directories:
+            self._temp_directories[artifact_name].cleanup()
+            del self._temp_directories[artifact_name]
+        else:
+            model_path = self._loaded_models[artifact_name]
+            if model_path is not None:
+                shutil.rmtree(model_path)
+
+        del self._loaded_models[artifact_name]
+        del self._loaded_model_info[artifact_name]
+
     def _cleanup(self):
         for name, _tempdir in self._temp_directories.items():
             if _tempdir is not None:
-                print("removing tempdir for model %s at %s" % (name, _tempdir.name))
                 _tempdir.cleanup()
 
 

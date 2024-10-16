@@ -239,6 +239,7 @@ class ModelsCollector(Thread):
         self.current = current
         self._interval = interval
         self._exit_event = Event()
+        self._start_event = Event()
         self._refresher = refresher
 
     def collect(self):
@@ -262,6 +263,7 @@ class ModelsCollector(Thread):
         if self._refresher.CARD_ID is None:
             raise ValueError("CARD_ID must be defined")
         current_card = self.current.card[self._refresher.CARD_ID]
+        self._start_event.set()
         self._refresher.on_startup(current_card)
         while self._exit_event.is_set() is False:
             self.run_update()
@@ -274,4 +276,5 @@ class ModelsCollector(Thread):
             # called with a `force` update so that the new card
             # is rendered when the thread is stopped.
             self.final_update()
-            self.join()
+            if self._start_event.is_set():
+                self.join()

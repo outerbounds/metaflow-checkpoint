@@ -19,6 +19,7 @@ from ..utils.general import safe_serialize
 from .storage_injections import (
     STORAGE_INJECTIONS_SINGLE_FILE_SAVE,
     STORAGE_INJECTIONS_MULTIPLE_FILE_SAVE,
+    STORAGE_INJECTIONS_LOAD_FILES,
 )
 from ..exceptions import KeyNotFoundError
 import json
@@ -156,6 +157,14 @@ class ObjectStorage(object):
             )
         method = STORAGE_INJECTIONS_MULTIPLE_FILE_SAVE[self._backend.TYPE]
         setattr(self._backend, "save_files", partial(method, self._backend))
+
+        if self._backend.TYPE not in STORAGE_INJECTIONS_LOAD_FILES:
+            raise NotImplementedError(
+                "Storage backend %s not supported with @checkpoint."
+                % self._backend.TYPE
+            )
+        method = STORAGE_INJECTIONS_LOAD_FILES[self._backend.TYPE]
+        setattr(self._backend, "load_files", partial(method, self._backend))
 
     def set_full_prefix(self, root_prefix):
         self.FULL_PREFIX = os.path.join(root_prefix, "/".join(self._path_components))
@@ -368,13 +377,14 @@ class ObjectStorage(object):
         # extracted is a directory.
     ):
         list_path_results = list(self.list_paths([key]))
+        # print(list_path_results)
         keys = [p.key for p in list_path_results]
         # We directly call load bytes here because `self.get_file` will add the root of the datastore
         # to the path and we don't want that.
-        with self._backend.load_bytes(keys) as get_results:
+        with self._backend.load_files(keys) as get_results:
             for list_key, path, meta in get_results:
                 if path is None:
-                    raise KeyNotFoundError(key)
+                    continue
 
                 path_within_dir = os.path.relpath(list_key, self.resolve_key_path(key))
                 # We need to construct the right path over here based on the
@@ -387,7 +397,6 @@ class ObjectStorage(object):
                     path,
                     os.path.join(local_directory, path_within_dir),
                 )
-        # for list_path_result in self.list_paths([key]):
 
         return local_directory
 

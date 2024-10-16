@@ -137,6 +137,13 @@ class CurrentCheckpointer:
         self._resolved_scope = resolved_scope
         self._logger = logger
         self._loaded_checkpoint = None
+        # Ensure that if a tempdir root path is provided and nothing
+        # exists then we end up creating that path. This helps ensure
+        # that rouge paths with arbirary Filesystems get created before
+        # temp dirs exists.
+        if temp_dir_root is not None:
+            if not os.path.exists(temp_dir_root):
+                os.makedirs(temp_dir_root, exist_ok=True)
         self._temp_chckpt_dir = tempfile.TemporaryDirectory(
             prefix="metaflow_checkpoint_", dir=self._temp_dir_root
         )
@@ -500,6 +507,10 @@ class CheckpointDecorator(StepDecorator):
         resolved_scope = self._resolve_scope()
         gang_scheduled_task = graph[step_name].parallel_step
 
+        temp_dir_root = settings.get(
+            "temp_dir_root",
+        )
+
         if gang_scheduled_task and not getattr(
             current.parallel, "control_task_id", None
         ):
@@ -547,6 +558,7 @@ class CheckpointDecorator(StepDecorator):
             resolved_scope,
             load_policy,
             gang_scheduled_task=gang_scheduled_task,
+            temp_dir_root=temp_dir_root,
         )
         self._loaded_checkpoint_lineage = []
         if self._loaded_checkpoint is not None:
@@ -620,6 +632,7 @@ class CheckpointDecorator(StepDecorator):
         resolved_scope,
         load_policy,
         gang_scheduled_task=False,
+        temp_dir_root=None,
     ):
         self._chkptr = CurrentCheckpointer(
             flow=flow,
@@ -627,6 +640,7 @@ class CheckpointDecorator(StepDecorator):
             resolved_scope=resolved_scope,
             logger=self._logger,
             gang_scheduled_task=gang_scheduled_task,
+            temp_dir_root=temp_dir_root,
         )
         return self._chkptr._setup_task_first_load(load_policy, flow)
 

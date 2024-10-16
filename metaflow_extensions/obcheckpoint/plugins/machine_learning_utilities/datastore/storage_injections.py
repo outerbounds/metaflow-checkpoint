@@ -1,7 +1,7 @@
 """
 This file contains methods injected into the `DataStoreStorage` class
 """
-from metaflow.plugins.datastores.s3_storage import S3, ARTIFACT_LOCALROOT
+from metaflow.plugins.datastores.s3_storage import S3, ARTIFACT_LOCALROOT, CloseAfterUse
 from metaflow.plugins.datastores.gs_storage import (
     handle_executor_exceptions,
     as_completed,
@@ -12,10 +12,47 @@ import shutil
 import os
 
 
+def load_files_s3(self, keys):
+    return _s3_load_bytes(self, keys)
+
+
+def load_files_gcp_or_azure_or_local(self, keys):
+    return self.load_bytes(keys)
+
+
+def _s3_load_bytes(self, paths):
+    if len(paths) == 0:
+        return CloseAfterUse(iter([]))
+
+    s3 = S3(
+        s3root=self.datastore_root,
+        external_client=self.s3_client,
+    )
+
+    def iter_results():
+        # We similarly do things in parallel for many files. This is again
+        # a hack.
+        if len(paths) > 10:
+            results = s3.get_many(paths, return_missing=True, return_info=True)
+            for r in results:
+                if r.exists:
+                    yield r.key, r.path, r.metadata
+                else:
+                    yield r.key, None, None
+        else:
+            for p in paths:
+                r = s3.get(p, return_missing=True, return_info=True)
+                if r.exists:
+                    yield r.key, r.path, r.metadata
+                else:
+                    yield r.key, None, None
+
+    return CloseAfterUse(iter_results(), closer=s3)
+
+
 def save_files_s3(self, key_path_tuples, overwrite=False):
     with S3(
         s3root=self.datastore_root,
-        tmproot=ARTIFACT_LOCALROOT,
         external_client=self.s3_client,
     ) as s3:
         s3.put_files(
@@ -33,7 +70,6 @@ def save_files_s3(self, key_path_tuples, overwrite=False):
 def save_file_s3(self, key, path, overwrite=False):
     with S3(
         s3root=self.datastore_root,
-        tmproot=ARTIFACT_LOCALROOT,
         external_client=self.s3_client,
     ) as s3:
         s3.put_files(
@@ -102,4 +138,11 @@ STORAGE_INJECTIONS_MULTIPLE_FILE_SAVE = {
     "gs": save_files_gcp_or_azure,
     "azure": save_files_gcp_or_azure,
     "local": save_files_local,
+}
+
+STORAGE_INJECTIONS_LOAD_FILES = {
+    "s3": load_files_s3,
+    "gs": load_files_gcp_or_azure_or_local,
+    "azure": load_files_gcp_or_azure_or_local,
+    "local": load_files_gcp_or_azure_or_local,
 }
