@@ -14,9 +14,6 @@ def signal_handler(sig, frame):
     sys.exit(0)
 
 
-signal.signal(signal.SIGINT, signal_handler)
-
-
 def parse_size(size_str):
     """
     Convert human-readable size (e.g., '1K', '1M', '1G', '1T') to bytes.
@@ -131,6 +128,7 @@ def usage_collectior(file, polling_interval):
     help="Polling interval in seconds",
 )
 def run(file, polling_interval):
+    signal.signal(signal.SIGINT, signal_handler)
     usage_collectior(file, polling_interval)
 
 

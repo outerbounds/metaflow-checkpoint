@@ -11,10 +11,6 @@ STEP_DECORATORS_DESC = [
         "huggingface_hub",
         ".machine_learning_utilities.hf_hub.decorator.HuggingfaceHubDecorator",
     ),
-    (
-        "disk_profiler",
-        ".machine_learning_utilities.checkpoints.cards.diskspace_usage_card.DiskUsageProfilerDecorator",
-    ),
 ]
 
 ###
