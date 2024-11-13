@@ -1,5 +1,5 @@
 from typing import Union, Optional, TYPE_CHECKING
-from metaflow.metadata import MetaDatum
+from metaflow.metadata_provider import MetaDatum
 from ..datastructures import CheckpointArtifact
 from .core import CheckpointReferenceResolver
 
