@@ -1,7 +1,7 @@
 # from functools import wraps
 
 import os
-from metaflow.metadata.metadata import MetadataProvider
+from metaflow.metadata_provider.metadata import MetadataProvider
 from .core import ModelSerializer, LoadedModels
 from ..card_utils import CardDecoratorInjector
 from .cards.model_card import ModelListRefresher, ModelsCollector
@@ -12,7 +12,7 @@ from ..datastructures import ModelArtifact
 
 # from .cards import CardDecoratorInjector, create_checkpoint_card, null_card
 from metaflow.decorators import StepDecorator
-from metaflow.metadata import MetaDatum
+from metaflow.metadata_provider import MetaDatum
 from typing import List, Dict, Union, Tuple, Optional, Callable, TYPE_CHECKING
 from functools import wraps, partial
 import tempfile
