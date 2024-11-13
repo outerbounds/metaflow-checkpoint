@@ -144,6 +144,41 @@ class HuggingfaceRegistry:
 
 
 class HuggingfaceLoadedModels:
+    """Manages loaded Hugging Face models and provides access to their local paths.
+
+    This class is accessed through `current.huggingface_hub.loaded` and provides a dictionary-like
+    interface to access the local paths of the huggingface repos specified in the `load` argument of the `@huggingface_hub` decorator.
+
+    Usage:
+    ------
+    ```python
+    # Basic loading and access
+    @huggingface_hub(load=["mistralai/Mistral-7B-Instruct-v0.1"])
+    @step
+    def my_step(self):
+        # Access the local path of a loaded model
+        model_path = current.huggingface_hub.loaded["mistralai/Mistral-7B-Instruct-v0.1"]
+
+        # Check if a model is loaded
+        if "mistralai/Mistral-7B-Instruct-v0.1" in current.huggingface_hub.loaded:
+            print("Model is loaded!")
+
+    # Custom path and advanced loading
+    @huggingface_hub(load=[
+        ("mistralai/Mistral-7B-Instruct-v0.1", "/custom/path"),  # Specify custom path
+        {
+            "repo_id": "org/model-name",
+            "force_download": True,  # Force fresh download
+            "repo_type": "dataset"   # Load dataset instead of model
+        }
+    ])
+    @step
+    def another_step(self):
+        # Models are available at specified paths
+        pass
+    ```
+    """
+
     def __init__(
         self, checkpointer: "HuggingfaceRegistry", logger, temp_dir_root=None
     ) -> None:
@@ -279,7 +314,18 @@ class HuggingfaceHubDecorator(CheckpointDecorator):
         The root directory that will hold the temporary directory where objects will be downloaded.
 
     load: Union[List[str], List[Tuple[Dict, str]], List[Tuple[str, str]], List[Dict], None]
-        The list of models to load.
+        The list of repos (models/datasets) to load.
+
+        Loaded repos can be accessed via `current.huggingface_hub.loaded`. If load is set, then the following happens:
+
+        - If repo (model/dataset) is not found in the datastore:
+            - Downloads the repo from Hugging Face Hub to a temporary directory (or uses specified path) for local access
+            - Stores it in Metaflow's datastore (s3/gcs/azure etc.) with a unique name based on repo_type/repo_id
+                - All HF models loaded for a `@step` will be cached separately under flow/step/namespace.
+
+        - If repo is found in the datastore:
+            - Loads it directly from datastore to local path (can be temporary directory or specified path)
+
 
     MF Add To Current
     -----------------
