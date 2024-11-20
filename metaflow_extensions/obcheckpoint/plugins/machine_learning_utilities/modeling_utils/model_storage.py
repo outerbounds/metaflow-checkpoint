@@ -1,7 +1,9 @@
 import os
 from typing import Optional
 from metaflow.datastore.datastore_storage import DataStoreStorage
-from ..datastore.core import ObjectStorage, DatastoreInterface
+from ..datastore.core import ObjectStorage, DatastoreInterface, STORAGE_FORMATS
+from .exceptions import ModelException
+from ..exceptions import KeyNotFoundError
 from ..datastructures import ModelArtifact
 from collections import namedtuple
 from ..exceptions import KeyNotCompatibleWithObjectException
@@ -72,11 +74,20 @@ class ModelDatastore(DatastoreInterface):
         self,
         artifact: ModelArtifact,
         file_path,
+        storage_format=STORAGE_FORMATS.TAR,
     ):
+        save_func = None
+        if storage_format == STORAGE_FORMATS.TAR:
+            save_func = self.artifact_store._save_tarball
+        elif storage_format == STORAGE_FORMATS.FILES:
+            save_func = self.artifact_store._save_objects
+        else:
+            raise ModelException(
+                "Incompatible storage format %s for `current.model.save`"
+                % (storage_format)
+            )
 
-        full_object_url, key_path, file_size = self.artifact_store._save_tarball(
-            artifact.uuid, file_path
-        )
+        full_object_url, key_path, file_size = save_func(artifact.uuid, file_path)
         _metadata = artifact.to_dict()
         _metadata.update(
             {
@@ -120,7 +131,29 @@ class ModelDatastore(DatastoreInterface):
         model_id,
         path,
     ):
-        self.artifact_store._load_tarball(
+        try:
+            metadata = self.artifact_metadatastore._load_metadata(
+                self.artifact_metadatastore.create_key_name(model_id, "metadata")
+            )
+            storage_format = metadata.get("storage_format")
+            if storage_format is None:
+                raise ModelException(
+                    "Malformed metadata for model with id %s." % model_id
+                )
+        except KeyNotFoundError:
+            raise ModelException(
+                "Metadata related to model with id %s not found." % model_id
+            )
+        load_func = None
+        if storage_format == STORAGE_FORMATS.TAR:
+            load_func = self.artifact_store._load_tarball
+        elif storage_format == STORAGE_FORMATS.FILES:
+            load_func = self.artifact_store._load_objects
+        else:
+            raise ModelException(
+                "Unsupported storage format for model with id %s." % model_id
+            )
+        load_func(
             model_id,
             path,
         )

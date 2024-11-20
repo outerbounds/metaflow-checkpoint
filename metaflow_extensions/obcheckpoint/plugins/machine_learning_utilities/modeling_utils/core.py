@@ -3,7 +3,7 @@ import time
 import tempfile
 from typing import Dict, List, Optional, Tuple, Union
 
-
+from ..datastore.core import STORAGE_FORMATS
 from ..exceptions import (
     KeyNotFoundError,
     KeyNotCompatibleException,
@@ -352,18 +352,31 @@ class ModelSerializer:
             storage_format=storage_format,
             model_uuid=model_uuid,
         )
-        return self._datastore.save(artifact, path)
+        return self._datastore.save(artifact, path, storage_format=storage_format)
 
     def save(
         self,
         path,
         label=None,
         metadata=None,
+        storage_format=STORAGE_FORMATS.TAR,
     ):
+        if storage_format not in [
+            STORAGE_FORMATS.TAR,
+            STORAGE_FORMATS.FILES,
+        ]:
+            raise ValueError(
+                "Unsupported storage format. Expected one of `%s` got %s"
+                % (
+                    "or ".join([STORAGE_FORMATS.TAR, STORAGE_FORMATS.FILES]),
+                    storage_format,
+                )
+            )
+
         model_artifact = self._serialize_to_datastore(
             path,
-            TarHandler.TYPE,  # TODO [POST RELEASE]: clean this up to even support directories
-            TarHandler.STORAGE_FORMAT,
+            serializer=storage_format,
+            storage_format=storage_format,
             metadata=metadata,
             label=label,
         ).to_dict()
