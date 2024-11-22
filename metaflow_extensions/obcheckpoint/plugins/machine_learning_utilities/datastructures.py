@@ -411,3 +411,13 @@ def load_model(
         )
     elif type(reference) == str:
         Factory.load_from_key(reference, path, storage_backend)
+
+
+# We need this here because it will help ensure that stubs for the right packages get picked up
+# Are adding it here because this seems to be one of the main entry points for stubs from the top level import of
+# This module.
+_addl_stubgen_modules = [
+    "metaflow_extensions.obcheckpoint.plugins.machine_learning_utilities.checkpoint.decorator",
+    "metaflow_extensions.obcheckpoint.plugins.machine_learning_utilities.hf_hub.decorator",
+    "metaflow_extensions.obcheckpoint.plugins.machine_learning_utilities.modeling_utils.core",
+]
