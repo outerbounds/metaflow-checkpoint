@@ -1,6 +1,7 @@
 import hashlib
 import time
 import shutil
+import json
 from ..checkpoints.decorator import (
     CheckpointDecorator,
     CurrentCheckpointer,
@@ -9,6 +10,7 @@ from ..checkpoints.decorator import (
 import sys
 import os
 import tempfile
+from metaflow.metadata_provider import MetaDatum
 
 HUGGINGFACE_HUB_ROOT_PREFIX = "mf.huggingface_hub"
 
@@ -53,6 +55,14 @@ def download_model_from_huggingface(**kwargs):
 
 
 class HuggingfaceRegistry:
+    """
+    This object provides syntactic sugar
+    over [huggingface_hub](https://github.com/huggingface/huggingface_hub)'s
+    [snapshot_download](https://huggingface.co/docs/huggingface_hub/main/en/package_reference/file_download#huggingface_hub.snapshot_download) function.
+    The `current.huggingface_hub.snapshot_download` function downloads objects from huggingface hub and saves them to the Metaflow's datastore under the
+    `<repo_type>/<repo_id>` name. The `repo_type` is by default `model` and can be overriden by passing the `repo_type` parameter to the `snapshot_download` function.
+    """
+
     _checkpointer: CurrentCheckpointer = None
     _loaded_models = None
 
@@ -408,6 +418,7 @@ class HuggingfaceHubDecorator(CheckpointDecorator):
         self._logger = logger
         self._chkptr = None
         self._collector_thread = None
+
         self._registry = HuggingfaceRegistry(logger)
 
     def _resolve_settings(self):
@@ -443,7 +454,8 @@ class HuggingfaceHubDecorator(CheckpointDecorator):
             ubf_context,
             inputs,
         )
-
+        self._runid, self._step_name, self._task_id = run_id, step_name, task_id
+        self._metadata_provider = metadata
         # Handle loading models if load argument is provided
         load_models = self.attributes.get("load")
         if load_models is not None:
@@ -495,6 +507,29 @@ class HuggingfaceHubDecorator(CheckpointDecorator):
                         f"Invalid model specification format: {model_spec}. "
                         "Must be string, tuple (dict/str, path), or dict"
                     )
+        
+        self.loaded_models_data = self._registry.loaded.info
+        model_keys = [
+            model_ref["key"] for _, model_ref in self.loaded_models_data.items()
+        ]
+        # Register metadata about the models that are loaded so that we can
+        # use it for book keeping in the future.
+        if len(model_keys) > 0:
+            self._metadata_provider.register_metadata(
+                self._runid,
+                self._step_name,
+                self._task_id,
+                [
+                    MetaDatum(
+                        "hf-loaded-models",
+                        json.dumps({"keys": model_keys}),
+                        "model-registry",
+                        tags=[
+                            "attempt_id:%s" % str(retry_count),
+                        ],
+                    )
+                ],
+            )
 
     def _setup_current(self):
         from metaflow import current

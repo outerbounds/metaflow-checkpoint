@@ -142,22 +142,26 @@ class ModelDecorator(StepDecorator):
         INTERNAL_ARTIFACTS_SET.add("_task_stored_models")
 
     def _save_metadata_about_models(self, explicit_model_list: List[Dict]):
-
         _md_list = []
         self._flow._task_stored_models = explicit_model_list
         # We do `-20` to ensure that we only store the last 20 models.
+        saved_models = []
         for idx, md in enumerate(explicit_model_list[-20:]):
             model_art = ModelArtifact.hydrate(md)
+            saved_models.append(model_art.key)
+
+        if len(saved_models) > 0:
             _md_list.append(
                 MetaDatum(
-                    field="model-key-%s" % idx,
-                    value=model_art.key,
+                    field="saved-models",
+                    value=json.dumps({"keys": saved_models}),
                     type=self.METADATUM_TYPE,
                     tags=[
                         "attempt_id:%s" % str(model_art.attempt),
                     ],
                 )
             )
+
         self._metadata_provider.register_metadata(
             self._runid, self._step_name, self._task_id, _md_list
         )
@@ -180,7 +184,7 @@ class ModelDecorator(StepDecorator):
         self._runid = run_id
         self._task_id = task_id
         self._step_name = step_name
-        self._setup_current(flow)
+        self._setup_current(flow, retry_count)
 
     def task_exception(
         self, exception, step_name, flow, graph, retry_count, max_user_code_retries
@@ -217,7 +221,7 @@ class ModelDecorator(StepDecorator):
 
         return partial(_wrapped_step_func, self._collector_thread)
 
-    def _setup_current(self, flow):
+    def _setup_current(self, flow, retry_count):
         from metaflow import current
 
         storage_backend = flowspec_utils.resolve_storage_backend(
@@ -236,6 +240,27 @@ class ModelDecorator(StepDecorator):
         )
 
         self.loaded_models_data = loaded_models.info
+        model_keys = [
+            model_ref["key"] for _, model_ref in self.loaded_models_data.items()
+        ]
+        # Register metadata about the models that are loaded so that we can
+        # use it for book keeping in the future.
+        if len(model_keys) > 0:
+            self._metadata_provider.register_metadata(
+                self._runid,
+                self._step_name,
+                self._task_id,
+                [
+                    MetaDatum(
+                        field="loaded-models",
+                        value=json.dumps({"keys": model_keys}),
+                        type=self.METADATUM_TYPE,
+                        tags=[
+                            "attempt_id:%s" % str(retry_count),
+                        ],
+                    )
+                ],
+            )
 
         serializer = ModelSerializer(
             pathspec=current.pathspec,
