@@ -417,7 +417,7 @@ def load_model(
 # Are adding it here because this seems to be one of the main entry points for stubs from the top level import of
 # This module.
 _addl_stubgen_modules = [
-    "metaflow_extensions.obcheckpoint.plugins.machine_learning_utilities.checkpoint.decorator",
+    "metaflow_extensions.obcheckpoint.plugins.machine_learning_utilities.checkpoints.decorator",
     "metaflow_extensions.obcheckpoint.plugins.machine_learning_utilities.hf_hub.decorator",
     "metaflow_extensions.obcheckpoint.plugins.machine_learning_utilities.modeling_utils.core",
 ]
