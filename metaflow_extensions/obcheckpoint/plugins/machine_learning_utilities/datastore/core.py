@@ -9,6 +9,7 @@ import shutil
 from typing import Iterator, List, Union, Tuple, Optional
 import os
 import json
+from pathlib import Path
 from io import BytesIO
 from collections import namedtuple
 from datetime import datetime
@@ -284,7 +285,7 @@ class ObjectStorage(object):
         datastore_url = self.resolve_key_path(key)
         return self._backend.load_bytes([datastore_url])
 
-    def list_paths(self, keys) -> Iterator[ListPathResult]:
+    def list_paths(self, keys, recursive=False) -> Iterator[ListPathResult]:
         "List all objects in the datastore's `keys` index."
 
         def _full_url_convert(lcr_path):
@@ -301,11 +302,32 @@ class ObjectStorage(object):
             return np
 
         keys = [self.resolve_key_path(key) for key in keys]
-        for list_content_result in self._backend.list_content(keys):
-            yield ListPathResult(
-                full_url=_full_url_convert(list_content_result.path),
-                key=_relative_url_convert(list_content_result.path),
-            )
+        if not recursive:
+            for list_content_result in self._backend.list_content(keys):
+                yield ListPathResult(
+                    full_url=_full_url_convert(list_content_result.path),
+                    key=_relative_url_convert(list_content_result.path),
+                )
+        else:
+
+            def _list_content_recursive(x_keys):
+                _keys = []
+                for list_content_result in self._backend.list_content(x_keys):
+                    if list_content_result.is_file:
+                        _keys.append(
+                            ListPathResult(
+                                full_url=_full_url_convert(list_content_result.path),
+                                key=_relative_url_convert(list_content_result.path),
+                            )
+                        )
+                    else:
+                        _keys.extend(
+                            _list_content_recursive([list_content_result.path])
+                        )
+                return _keys
+
+            for x in _list_content_recursive(keys):
+                yield x
 
     def _save_objects(
         self,
@@ -376,7 +398,7 @@ class ObjectStorage(object):
         # Its assumed here that the local path where everything is getting
         # extracted is a directory.
     ):
-        list_path_results = list(self.list_paths([key]))
+        list_path_results = list(self.list_paths([key], recursive=True))
         # print(list_path_results)
         keys = [p.key for p in list_path_results]
         # We directly call load bytes here because `self.get_file` will add the root of the datastore
@@ -393,9 +415,11 @@ class ObjectStorage(object):
                 # to the actual file/directory within it.
                 # We do this because we want the entire directory structure
                 # to be preserved when we download the objects on local.
+                move_to_path = os.path.join(local_directory, path_within_dir)
+                Path(move_to_path).parent.mkdir(parents=True, exist_ok=True)
                 shutil.move(
                     path,
-                    os.path.join(local_directory, path_within_dir),
+                    move_to_path,
                 )
 
         return local_directory
