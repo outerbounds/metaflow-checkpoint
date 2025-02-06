@@ -515,9 +515,9 @@ class CheckpointDatastore(DatastoreInterface):
 
     def list(
         self,
-        name=None,
-        attempt=None,
-        within_task=True,
+        name: Optional[str] = None,
+        attempt: Optional[int] = None,
+        within_task: Optional[bool] = True,
     ):
 
         if not within_task:

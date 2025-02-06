@@ -104,6 +104,20 @@ class Checkpointer:
         return _art
 
     @classmethod
+    def _from_task_object(
+        cls,
+        task: "metaflow.Task",
+    ):
+        _checkpoint_datastore = CheckpointDatastore.init_read_store(
+            storage_backend=resolve_task_storage_backend(task),
+            pathspec=task.pathspec,
+        )
+        return cls(
+            datastore=_checkpoint_datastore,
+            attempt=task.current_attempt,
+        )
+
+    @classmethod
     def _from_checkpoint_and_storage_backend(
         cls, checkpoint: CheckpointArtifact, storage_backend
     ):
@@ -161,9 +175,9 @@ class Checkpointer:
 
     def _list_checkpoints(
         self,
-        name=DEFAULT_NAME,
-        attempt=None,
-        within_task=True,
+        name: Optional[str] = DEFAULT_NAME,
+        attempt: Optional[int] = None,
+        within_task: Optional[bool] = True,
     ):
         return self._checkpoint_datastore.list(
             name=name, attempt=attempt, within_task=within_task
@@ -245,6 +259,16 @@ class ReadResolver:
     Responsible for instantiating the `CheckpointDatastore` during read operations
     based on different context's.
     """
+
+    @classmethod
+    def from_pathspec(cls, pathspec):
+        # This resolver helps create the datastore when the user is calling `Checkpoint.list`
+        # from a notebook or a script
+        storage_backend = resolve_task_storage_backend(pathspec=pathspec)
+        _checkpoint_datastore = CheckpointDatastore.init_read_store(
+            storage_backend, pathspec=pathspec
+        )
+        return _checkpoint_datastore
 
     @classmethod
     def from_key(cls, checkpoint_key):

@@ -99,7 +99,7 @@ class HuggingfaceRegistry:
         repo_type = kwargs.get("repo_type", "model")
         force_download = kwargs.get("force_download", False)
         chckpt_name = self._cache_name("{}/{}".format(repo_type, repo_name))
-        chckpts = list(self._checkpointer.list(name=chckpt_name, within_task=False))
+        chckpts = list(self._checkpointer.list(name=chckpt_name, full_namespace=True))
         if len(chckpts) > 0 and not force_download:
             return chckpts[0]
 
@@ -275,7 +275,7 @@ class HuggingfaceLoadedModels:
         """
         chckpt_name = self._checkpointer._cache_name("{}/{}".format(repo_type, repo_id))
         chckpts = list(
-            self._checkpointer._checkpointer.list(name=chckpt_name, within_task=False)
+            self._checkpointer._checkpointer.list(name=chckpt_name, full_namespace=True)
         )
 
         # Setup model path and load if needed
@@ -507,7 +507,7 @@ class HuggingfaceHubDecorator(CheckpointDecorator):
                         f"Invalid model specification format: {model_spec}. "
                         "Must be string, tuple (dict/str, path), or dict"
                     )
-        
+
         self.loaded_models_data = self._registry.loaded.info
         model_keys = [
             model_ref["key"] for _, model_ref in self.loaded_models_data.items()

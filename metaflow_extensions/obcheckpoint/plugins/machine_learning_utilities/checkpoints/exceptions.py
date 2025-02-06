@@ -9,7 +9,7 @@ class CheckpointNotAvailableException(MetaflowException):
 
 
 class CheckpointException(MetaflowException):
-    headline = "@checkpoint Exception"
+    headline = "Metaflow @checkpoint Exception"
 
     def __init__(self, message):
         super(CheckpointException, self).__init__(message)

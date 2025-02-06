@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from .final_api import Checkpoint
 
 
-def _instantiate_checkpoint(
+def _instantiate_checkpoint_for_writes(
     checkpoint_object: "Checkpoint",
     flow: Optional["metaflow.FlowSpec"] = None,  # User Facing
     task_identifier: Optional[str] = None,  # Advanced options
@@ -49,6 +49,11 @@ def _instantiate_checkpoint(
     chkpt._checkpoint_uid = WriteResolver.construct_checkpoint_id(resolver_info)
     checkpoint_object._set_checkpointer(chkpt)
     return checkpoint_object
+
+
+def _instantiate_checkpointer_for_list(task: "metaflow.Task"):
+    _checkpointer = Checkpointer._from_task_object(task)
+    return _checkpointer
 
 
 # Technically this method should ensure that the Checkpointer also takes the

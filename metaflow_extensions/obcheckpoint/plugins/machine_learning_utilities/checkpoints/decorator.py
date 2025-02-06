@@ -11,7 +11,7 @@ from .lineage import checkpoint_load_related_metadata, trace_lineage
 from .constructors import (
     DEFAULT_NAME,
     load_checkpoint,
-    _instantiate_checkpoint,
+    _instantiate_checkpoint_for_writes,
 )
 from .core import (
     ScopeResolver,
@@ -70,7 +70,7 @@ def _store_checkpoint_ref_as_data_artifact(
     )
 
     for checkpoint in checkpointer._default_checkpointer.list(
-        attempt=attempt, as_dict=False, within_task=True
+        attempt=attempt, as_dict=False, full_namespace=False
     ):
         _chckpts.append(checkpoint)
 
@@ -148,7 +148,7 @@ class CurrentCheckpointer:
             prefix="metaflow_checkpoint_", dir=self._temp_dir_root
         )
         self._task_identifier = task_identifier
-        self._default_checkpointer = _instantiate_checkpoint(
+        self._default_checkpointer = _instantiate_checkpoint_for_writes(
             Checkpoint(),
             flow=flow,
             task_identifier=task_identifier,
@@ -243,16 +243,64 @@ class CurrentCheckpointer:
         name: Optional[str] = None,
         task: Optional[Union[str, "metaflow.Task"]] = None,
         attempt: Optional[int] = None,
-        within_task: bool = True
-        # `within_task` is a hidden option. If set to False, it will list all checkpoints in "scope" (current namespace).
-        # If true, it will list all checkpoints created within the task
-    ):
+        full_namespace: bool = False,  # If True, list all checkpoints in the full namespace
+    ) -> List[Dict]:
+        """
+        lists the checkpoints in the current task or the specified task.
+
+        When users call `list` without any arguments, it will list all the checkpoints in the currently executing
+        task (this includes all attempts). If the `list` method is called without any arguments outside a Metaflow Task execution context,
+        it will raise an exception. Users can also call `list` with `attempt` argument to list all checkpoints within a
+        the specific attempt of the currently executing task.
+
+        When a `task` argument is provided, the `list` method will return all the checkpoints
+        for a task's latest attempt unless a specific attempt number is set in the `attempt` argument.
+        If the `Task` object contains a `DataArtifact` with all the previous checkpoints, then the `list` method will return
+        all the checkpoints from the data artifact. If for some reason the DataArtifact is not written, then the `list` method will
+        return all checkpoints directly from the checkpoint's datastore.
+
+        Usage:
+        ------
+
+        ```python
+        current.checkpoint.list(name="best") # lists checkpoints in the current task with the name "best"
+        current.checkpoint.list( # Identical as the above one but lists checkpoints from the specified task with the name "best"
+            task="anotherflow/somerunid/somestep/sometask",
+            name="best"
+        )
+        current.checkpoint.list() # lists **all** the checkpoints in the current task (including the ones from all attempts)
+        ```
+
+        Parameters
+        ----------
+
+        name : Optional[str], default: None
+            Filter checkpoints by name.
+
+        task : Optional[Union["metaflow.Task", str]], default: None
+            The task to list checkpoints from. Can be either a `Task` object or a task pathspec string.
+            If None, lists checkpoints for the current task.
+            Raises an exception if task is not provided when called outside a Metaflow Task execution context.
+
+        attempt : Optional[Union[int, str]], default: None
+            Filter checkpoints by attempt.
+            If `task` is not None and `attempt` is None, then it will load the task's latest attempt
+
+        full_namespace : bool, default: False
+            If True, lists checkpoints from the full namespace.
+            Only allowed during a Metaflow Task execution context.
+            Raises an exception if `full_namespace` is set to True when called outside a Metaflow Task execution context.
+
+        Returns
+        -------
+        List[Dict]
+        """
         return self._default_checkpointer.list(
             name=name,
             task=task,
             attempt=attempt,
             as_dict=True,
-            within_task=within_task,
+            full_namespace=full_namespace,
         )
 
     def cleanup(self):

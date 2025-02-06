@@ -8,35 +8,61 @@ from .constants import (
     DEFAULT_STORAGE_FORMAT,
 )
 from .constructors import (
-    _instantiate_checkpoint,
+    _instantiate_checkpoint_for_writes,
+    _instantiate_checkpointer_for_list,
     load_checkpoint,
 )
-from .exceptions import CheckpointNotAvailableException
+from .exceptions import CheckpointNotAvailableException, CheckpointException
 
 if TYPE_CHECKING:
     import metaflow
     from .core import Checkpointer
 
 
-def _extract_checkpoints_for_task(
+def _extract_task_object(
     task: Union["metaflow.Task", str], attempt: Optional[Union[int, str]] = None
 ):
     from metaflow import Task
 
+    if attempt is not None:
+        try:
+            _attempt = int(attempt)
+        except ValueError:
+            raise ValueError("Attempt number must be an integer. Got: %s" % attempt)
     if isinstance(task, str):
         if attempt is not None:
-            try:
-                _attempt = int(attempt)
-            except ValueError:
-                raise ValueError("Attempt number must be an integer. Got: %s" % attempt)
             task = Task(task, attempt=_attempt, _namespace_check=False)
         task = Task(task, _namespace_check=False)
+    elif isinstance(task, Task) and attempt is not None:
+        task = Task(task.pathspec, attempt=_attempt, _namespace_check=False)
+    return task
+
+
+def _extract_checkpoints_from_task_object(
+    task: "metaflow.Task",
+):
     try:
         return task[TASK_CHECKPOINTS_ARTIFACT_NAME].data
     except NameError:
         raise CheckpointNotAvailableException(
             "Checkpoints were not recorded for the task"
         )
+    except KeyError:
+        raise CheckpointNotAvailableException(
+            "Checkpoints were not recorded for the task"
+        )
+
+
+def _inside_task_context():
+    """
+    If we can instantiate a `Checkpoint` object to write, then we are ideally in Metaflow task "context".
+    Meaning that we might be inside a Metaflow task process or in a process spawed by a metaflow task process
+    """
+    try:
+        _instantiate_checkpoint_for_writes(Checkpoint())
+        return True
+    except ValueError:
+        return False
 
 
 class Checkpoint:
@@ -65,7 +91,7 @@ class Checkpoint:
         latest=True,
         name=DEFAULT_NAME,
         storage_format=DEFAULT_STORAGE_FORMAT,
-    ):
+    ) -> Dict:
         """
         Saves the checkpoint to the datastore
 
@@ -102,7 +128,21 @@ class Checkpoint:
         if path is None:
             path = self.directory
         if self._checkpointer is None:
-            self = _instantiate_checkpoint(self)
+            # If the `Checkpoint` object is being used by `CurrentCheckpointer` then we have already set the `_checkpointer`
+            # attribute. If it is not being set by `CurrentCheckpointer` then the user might be calling it in an outside
+            # process or within main process. So we try to instantiate it for writes.
+            try:
+                self = _instantiate_checkpoint_for_writes(self)
+            except ValueError as e:
+                raise CheckpointException(
+                    (
+                        "`Checkpoint.save` can only be called within a Metaflow Task execution. If you"
+                        "are calling `Checkpoint.save` outside a Metaflow Task process, ensure that you inherit"
+                        "the environment variables from the Metaflow Task process or pass the `METAFLOW_CHECKPOINT_UID`"
+                        "environment variable from the Metaflow Task process to your subprocess."
+                    )
+                )
+
         if metadata is None:
             metadata = {}
         return self._checkpointer.save(
@@ -127,15 +167,23 @@ class Checkpoint:
         name: Optional[str] = None,
         task: Optional[Union["metaflow.Task", str]] = None,
         attempt: Optional[Union[int, str]] = None,
+        full_namespace: bool = False,  # list within the full namespace
         as_dict: bool = True,  # This is not public!
-        within_task: bool = True,  # This is not public!
-        # `within_task` is a hidden option. If set to False, it will list all checkpoints in "scope" (current namespace).
-        # If true, it will list all checkpoints created within the task
-    ) -> Iterable[Union[Dict, CheckpointArtifact]]:
+    ) -> List[Union[Dict, CheckpointArtifact]]:
 
         """
-        lists the checkpoints in the datastore based on the Task.
-        It will always be task scoped.
+        lists the checkpoints in the current task or the specified task.
+
+        When users call `list` without any arguments, it will list all the checkpoints in the currently executing
+        task (this includes all attempts). If the `list` method is called without any arguments outside a Metaflow Task execution context,
+        it will raise an exception. Users can also call `list` with `attempt` argument to list all checkpoints within a
+        the specific attempt of the currently executing task.
+
+        When a `task` argument is provided, the `list` method will return all the checkpoints
+        for a task's latest attempt unless a specific attempt number is set in the `attempt` argument.
+        If the `Task` object contains a `DataArtifact` with all the previous checkpoints, then the `list` method will return
+        all the checkpoints from the data artifact. If for some reason the DataArtifact is not written, then the `list` method will
+        return all checkpoints directly from the checkpoint's datastore.
 
         Usage:
         ------
@@ -144,46 +192,154 @@ class Checkpoint:
 
         Checkpoint().list(name="best") # lists checkpoints in the current task with the name "best"
         Checkpoint().list(task="anotherflow/somerunid/somestep/sometask", name="best") # Identical as the above one but
-        Checkpoint().list() # lists all the checkpoints in the current task
+        Checkpoint().list() # lists **all** the checkpoints in the current task (including the ones from all attempts)
 
         ```
 
         Parameters
         ----------
 
-        - `name`:
-            - name of the checkpoint to filter for
-        - `task`:
-            - Task object outside the one that is currently set in the `Checkpoint` object; Can be a pathspec string.
-        - `attempt`:
-            - attempt number of the task (optional filter. If none, then lists all checkpoints from all attempts)
+        name : Optional[str], default: None
+            Filter checkpoints by name.
+
+        task : Optional[Union["metaflow.Task", str]], default: None
+            The task to list checkpoints from. Can be either a `Task` object or a task pathspec string.
+            If None, lists checkpoints for the current task.
+            Raises an exception if task is not provided when called outside a Metaflow Task execution context.
+
+        attempt : Optional[Union[int, str]], default: None
+            Filter checkpoints by attempt.
+            If `task` is not None and `attempt` is None, then it will load the task's latest attempt
+
+        full_namespace : bool, default: False
+            If True, lists checkpoints from the full namespace.
+            Only allowed during a Metaflow Task execution context.
+            Raises an exception if `full_namespace` is set to True when called outside a Metaflow Task execution context.
+
+        Returns
+        -------
+        List[Dict]
         """
 
-        if self._checkpointer is None and task is None:
+        def _sort_checkpoints_by_version(dicts: list[Union[Dict, CheckpointArtifact]]):
+            def _get_version_id(x: Union[Dict, CheckpointArtifact]):
+                if isinstance(x, CheckpointArtifact):
+                    return x.version_id
+                return x.get("version_id", -1)
+
+            return sorted(
+                dicts,
+                key=_get_version_id,
+                reverse=True,
+            )
+
+        # There are two potential code paths here:
+        # 1. Checkpoint.list is being called outside the Task Process in a Notebook or a script to extract the
+        # checkpoints. At this point, we can check if the checkpoints are stored in the `Task` object;
+        # if that fails, we can check if checkpoints are written within the Metadata store. of the task. Both code paths
+        # are valid when Metaflow is being called from a notebook or a script. We allow the metadata store access to
+        # ensure that the checkpoints are not lost even the task completely crashed we were unable to log any data artifacts.
+        # 2. Checkpoint.list is being called within a Task Process. In this case we can directly access the datastore if the
+        # task object is not available. If the task object is available , we do the same things as specified in (1.)
+
+        # The following table outlines the outcomes of the different code paths.
+
+        # |  MF TASK CONTEXT | Task Object  | Outcome
+        # | ---------------- | ------------ | ------------
+        # | -----False------ | ----False--- | (C1) Raise Exception
+        # | -----False------ | ----True---- | (C2) Search Task's DataArtifact and if not then search the Task's Metadata store
+        # | -----True------- | ----False--- | (C3) instantiate the checkpointer and search it's metadata store
+        # | -----True------- | ----True---- | (C4) Search Task's DataArtifact and if not then search the Task's Metadata store
+
+        _task_object = None
+        if task is not None:
+            # This function will set the a `metaflow.Task` object with the right
+            # attempt number if provided.
+            _task_object = _extract_task_object(task, attempt)
+
+        checkpoint_data_artifact = None
+        if _task_object is not None:
+            try:
+                checkpoint_data_artifact = _extract_checkpoints_from_task_object(
+                    _task_object
+                )
+            except CheckpointNotAvailableException:
+                pass
+
+        # If the checkpoint data artifact for the Task in question is available then we can directly return the list of
+        # checkpoints from the task object.
+        # Outcome : (C2) / (C4)
+        if checkpoint_data_artifact is not None:
+            # Since the data artifact will have everything in the dictionary format
+            # we will check if the user wants CheckpointArtifacts or dicts.
+            return _sort_checkpoints_by_version(
+                [
+                    CheckpointArtifact.hydrate(chckpt) if not as_dict else chckpt
+                    for chckpt in checkpoint_data_artifact
+                    if (name is None or CheckpointArtifact.hydrate(chckpt).name == name)
+                ]
+            )
+
+        not_within_task_context = not _inside_task_context()
+        # At this point if we are not even given a Task object and we are also not even insde a Metaflow's Task execution
+        # then we can raise an error that users cannot call `Checkpoint.list` outside a Metaflow Task execution.
+        # Outcome : (C1)
+        if _task_object is None and not_within_task_context:
             raise ValueError(
                 "Calling `Checkpoint.list` requires a `task` argument when its is called outside a Metaflow process."
             )
-        _gen = None
-        if task is not None:
-            _gen = _extract_checkpoints_for_task(task, attempt)
-            for chckpt in _gen:
-                art = CheckpointArtifact.hydrate(chckpt)
-                if name is not None and art.name != name:
-                    continue
-                if as_dict:
-                    yield art.to_dict()
-                else:
-                    yield art
-            return
-        else:
-            _gen = self._checkpointer._list_checkpoints(
-                name=name, attempt=attempt, within_task=within_task
+
+        if not_within_task_context and full_namespace:
+            # This means the user is trying to access checkpoints in "scope" but they are not even inside a Metaflow Task execution.
+            # context. Which is not allowed.
+            raise ValueError(
+                "Calling `Checkpoint.list` with `full_namespace=False` outside a Metaflow Task's execution context is not allowed."
             )
-        for checkpoint in _gen:
-            if as_dict:
-                yield checkpoint.to_dict()
-            else:
-                yield checkpoint
+
+        # At this point if we have a task object then either that task's checkpoint data artifact
+        # was not written. Then we can try and do a list from the task's Metadata store.
+        # We instantiate a checkpointer and for that attempt then call the `list` method.
+        # To do this check it doesn't matter if we are within a Metaflow Task execution context or not.
+        # Outcome : (C2) / (C4)
+        if _task_object is not None:
+            # If there is an explicit task object provided by the user
+            # Then we will list the checkpoints found in the task's latest attempt
+            _checkpointer = _instantiate_checkpointer_for_list(_task_object)
+            return _sort_checkpoints_by_version(
+                [
+                    chckpt.to_dict() if as_dict else chckpt
+                    for chckpt in _checkpointer._list_checkpoints(
+                        name=name,
+                        attempt=_checkpointer._attempt,
+                        within_task=not full_namespace,
+                    )
+                ]
+            )
+
+        # There is no task object clearly the user has called `Checkpoint.list`
+        # within a Metaflow Task execution context (if it was not within task execution context
+        # were not then we would have alreadyraised an exception). (outcome : (C1))
+        # Hence we will check if there is a checkpointer or we will safely instantiate
+        # a write checkpointer.
+        # Outcome : (C3)
+        _checkpointer = self._checkpointer
+        if _checkpointer is None:
+            self = _instantiate_checkpoint_for_writes(self)
+            _checkpointer = self._checkpointer
+
+        # Since at this point we know the user is calling `current.checkpoint.list`
+        # without any `task`, that means the user is trying to list all checkpoints
+        # within the current executing task.
+        return _sort_checkpoints_by_version(
+            [
+                chckpt.to_dict() if as_dict else chckpt
+                for chckpt in _checkpointer._list_checkpoints(
+                    name=name,
+                    attempt=attempt,  # Return all attempts if `attempt` is None
+                    within_task=not full_namespace,
+                )
+            ]
+        )
 
     def load(
         self,
