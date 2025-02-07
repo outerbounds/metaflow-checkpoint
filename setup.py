@@ -1,6 +1,6 @@
 from setuptools import setup, find_namespace_packages
 
-version = "0.1.7"
+version = "0.1.8"
 
 
 def get_long_description() -> str:
