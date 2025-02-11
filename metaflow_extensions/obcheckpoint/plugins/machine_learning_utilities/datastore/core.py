@@ -141,6 +141,14 @@ class ObjectStorage(object):
         injects the save_file method into the DataStoreStorage object
         based on the storage backend.
         """
+        needed_methods = [
+            "save_file",
+            "save_files",
+            "load_files",
+        ]
+
+        if all([hasattr(self._backend, m) for m in needed_methods]):
+            return
 
         if self._backend.TYPE not in STORAGE_INJECTIONS_SINGLE_FILE_SAVE:
             raise NotImplementedError(

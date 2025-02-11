@@ -12,7 +12,12 @@ STEP_DECORATORS_DESC = [
         ".machine_learning_utilities.hf_hub.decorator.HuggingfaceHubDecorator",
     ),
 ]
-
+DATASTORES_DESC = [
+    (
+        "s3-compatible",
+        ".datastores.s3_compat.S3CompatibleStorage",
+    )
+]
 ###
 # CONFIGURE: Similar to datatools, you can make visible under metaflow.plugins.* other
 #            submodules not referenced in this file
