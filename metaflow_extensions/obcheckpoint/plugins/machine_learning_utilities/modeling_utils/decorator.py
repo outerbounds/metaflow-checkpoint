@@ -5,7 +5,7 @@ from metaflow.metadata_provider.metadata import MetadataProvider
 from .core import ModelSerializer, LoadedModels
 from ..card_utils import CardDecoratorInjector
 from .cards.model_card import ModelListRefresher, ModelsCollector
-from ..utils import flowspec_utils
+from ..datastore.task_utils import storage_backend_from_flow
 
 # from .lineage import checkpoint_load_related_metadata, trace_lineage
 from ..datastructures import ModelArtifact
@@ -16,6 +16,7 @@ from metaflow.metadata_provider import MetaDatum
 from typing import List, Dict, Union, Tuple, Optional, Callable, TYPE_CHECKING
 from functools import wraps, partial
 import tempfile
+from ..datastore.decorator import set_datastore_context
 from metaflow.flowspec import INTERNAL_ARTIFACTS_SET
 import json
 
@@ -180,6 +181,7 @@ class ModelDecorator(StepDecorator):
         ubf_context,
         inputs,
     ):
+        set_datastore_context(flow, metadata, run_id, step_name, task_id, retry_count)
         self._metadata_provider = metadata
         self._runid = run_id
         self._task_id = task_id
@@ -224,8 +226,8 @@ class ModelDecorator(StepDecorator):
     def _setup_current(self, flow, retry_count):
         from metaflow import current
 
-        storage_backend = flowspec_utils.resolve_storage_backend(
-            run=flow,
+        storage_backend = storage_backend_from_flow(
+            flow=flow,
         )
 
         loaded_models = LoadedModels(

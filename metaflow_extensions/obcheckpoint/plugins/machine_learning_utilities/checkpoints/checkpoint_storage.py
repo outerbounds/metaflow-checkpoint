@@ -523,7 +523,7 @@ class CheckpointDatastore(DatastoreInterface):
         if not within_task:
             if not self.artifact_ready:
                 raise DatastoreNotReadyException(
-                    "Checkpoint datastore is not ready to list all checkpoints"
+                    "Checkpoint datastore is not ready to list all checkpoints in the namespace"
                 )
             return _recover_checkpoints(
                 self.artifact_metadatastore,
@@ -546,6 +546,22 @@ class CheckpointDatastore(DatastoreInterface):
     @classmethod
     def decompose_key(cls, key) -> CheckpointsPathComponents:
         return decompose_key_artifact_store(key)
+
+    def __str__(self):
+        stores = [
+            ("metadata_store", self.metadata_store),
+            ("artifact_store", self.artifact_store),
+            ("artifact_metadatastore", self.artifact_metadatastore),
+        ]
+        return """
+        CheckpointDatastore:
+        --------------------
+        %s
+        """ % (
+            "\n".join(
+                [f"{name}\n{str(store)}" for name, store in stores if store is not None]
+            )
+        )
 
 
 def _recover_checkpoints(

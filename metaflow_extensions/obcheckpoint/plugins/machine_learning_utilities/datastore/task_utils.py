@@ -1,10 +1,8 @@
 # THIS FILE IS ALSO USED (Figure where is the best place to put it.)
 from typing import Union, Optional, TYPE_CHECKING
-
+from metaflow import current
 from metaflow.exception import MetaflowException
-from metaflow.datastore import FlowDataStore
-from .core import resolve_root
-
+from .context import datastore_context
 
 if TYPE_CHECKING:
     import metaflow
@@ -14,57 +12,47 @@ class UnresolvableDatastoreException(MetaflowException):
     pass
 
 
-def _get_flow_datastore(task):
-    flow_name = task.pathspec.split("/")[0]
-    # Resolve datastore type
-    ds_type = None
-    # We need to set the correct datastore root here so that
-    # we can ensure that the card client picks up the correct path to the cards
-
-    meta_dict = task.metadata_dict
-    ds_type = meta_dict.get("ds-type", None)
-
-    if ds_type is None:
-        raise UnresolvableDatastoreException(task)
-
-    ds_root = meta_dict.get("ds-root", None)
-
-    if ds_root is None:
-        ds_root = resolve_root(ds_type)
-
-    # Delay load to prevent circular dep
-    from metaflow.plugins import DATASTORES
-
-    storage_impl = [d for d in DATASTORES if d.TYPE == ds_type][0]
-    return FlowDataStore(
-        flow_name=flow_name,
-        environment=None,
-        storage_impl=storage_impl,
-        # ! ds root cannot be none otherwise `list_content`
-        # ! method fails in the datastore abstraction.
-        ds_root=ds_root,
-    )
-
-
 def init_datastorage_object():
-    from metaflow.plugins import DATASTORES
-    from metaflow.metaflow_config import DEFAULT_DATASTORE
-
-    storage_impl = [d for d in DATASTORES if d.TYPE == DEFAULT_DATASTORE][0]
-    return storage_impl(storage_impl.get_datastore_root_from_config(print))
+    return datastore_context.get()
 
 
 def resolve_storage_backend(pathspec: Union[str, "metaflow.Task"] = None):
-    from metaflow.client.core import Task
+    """
+    This function is ONLY called when the user is calling `Checkpoint.list`.
+    What happens when users call list:
+        1. The task has completed so the list call is using the `_task_checkpoints` data-artifact to list the checkpoints.
+        2. The task is still running or has crashed. This means that in order to list the checkpoints, we need access to the datastore.
 
-    if isinstance(pathspec, Task):
-        return _get_flow_datastore(pathspec)._storage_impl
-    elif isinstance(pathspec, str):
-        if len(pathspec.split("/")) != 4:
-            raise ValueError("Pathspec is not of the correct format.")
-        return _get_flow_datastore(Task(pathspec))._storage_impl
+    For case `1`, this code path wont even be called because the data-artifact is already a separate object.
+    For case `2` is where this code path is important. But since we now expose a `artifact_store_from` context manager, we
+    know pre-hand what the datastore needs to be and the datastore context has already been switched.
+
+    SO in turn, one can make the argument that this function is not needed and we can just have a
+    users do a `Checkpoint.list` under the context manager if they need to access objects in a different datastore.
+
+    This is a respectible pattern since directly reading the task metadata and trying to do a list call is not a good pattern
+    since the creds of metaflow default datastore might not be the same as the datastore the user wants to access.
+
+    There is a function that can help verify if the datastore set in the task metadata
+    is the same as the default datastore. If it is not, then we should shout warning messages
+    to the user. In case the permissions are the same, nothing wrong happens, if they are not then
+    user will have some hint in the logs to help them figure out the issue.
+    """
+    if isinstance(pathspec, str):
+        from metaflow import Task
+
+        task = Task(pathspec)
     else:
-        raise ValueError(
-            "Pathspec is of invalid type. It should be either a string or a Task object but got %s"
-            % type(pathspec)
-        )
+        task = pathspec
+    validation = datastore_context.current_context_matches_task_metadata(task)
+    return validation, datastore_context.get()
+
+
+class FlowNotRunningException(MetaflowException):
+    pass
+
+
+def storage_backend_from_flow(flow: "metaflow.FlowSpec"):
+    if not current.is_running_flow:
+        raise FlowNotRunningException
+    return datastore_context.get()

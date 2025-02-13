@@ -28,6 +28,7 @@ from .constants import (
     TASK_LATEST_CHECKPOINT_ARTIFACT_NAME,
     DEFAULT_STORAGE_FORMAT,
 )
+from ..datastore.decorator import set_datastore_context
 
 # from .cards import CardDecoratorInjector, create_checkpoint_card, null_card
 from metaflow.decorators import StepDecorator, FlowDecorator
@@ -549,6 +550,7 @@ class CheckpointDecorator(StepDecorator):
     ):
         from metaflow import current
 
+        set_datastore_context(flow, metadata, run_id, step_name, task_id, retry_count)
         settings = self._resolve_settings()
         load_policy = settings["load_policy"]
         self._load_policy = load_policy

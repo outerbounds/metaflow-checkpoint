@@ -2,7 +2,7 @@ from collections import namedtuple
 from hashlib import sha256
 
 import os
-
+import sys
 
 from metaflow import current
 from metaflow.exception import MetaflowException
@@ -15,6 +15,7 @@ from ..datastructures import CheckpointArtifact
 from ..datastore.task_utils import (
     init_datastorage_object,
     resolve_storage_backend as resolve_task_storage_backend,
+    storage_backend_from_flow,
 )
 from .constants import (
     CHECKPOINT_TAG_PREFIX,
@@ -83,6 +84,19 @@ class Checkpointer:
             name=name,
         )
 
+    def artifact_id(self, name: str, version_id: int = None):
+        # ! Can only be run when in write mode.
+        version_id = self._current_version if version_id is None else version_id
+        key_name = self._checkpoint_datastore.create_key_name(
+            self._checkpoint_datastore._NAME_ENTROPY,
+            self._attempt,
+            name,
+            version_id,
+        )
+        return self._checkpoint_datastore.artifact_store.resolve_key_relative_path(
+            key_name
+        )
+
     def save(
         self,
         path: str,
@@ -108,10 +122,11 @@ class Checkpointer:
         cls,
         task: "metaflow.Task",
     ):
-        _checkpoint_datastore = CheckpointDatastore.init_read_store(
-            storage_backend=resolve_task_storage_backend(task),
-            pathspec=task.pathspec,
-        )
+        """
+        This will instantiate the Checkpoint Datastore with only access to the checkpoint metadata store.
+        Useful when we are making checkpoint list calls post task-runtime.
+        """
+        _checkpoint_datastore = ReadResolver.from_pathspec(task.pathspec)
         return cls(
             datastore=_checkpoint_datastore,
             attempt=task.current_attempt,
@@ -146,11 +161,9 @@ class Checkpointer:
 
     @classmethod
     def _from_checkpoint(cls, checkpoint: Union[CheckpointArtifact, dict]):
-        key, pathspec = None, None
         _chckpt: CheckpointArtifact = CheckpointArtifact.hydrate(checkpoint)
-        key, pathspec = _chckpt.key, _chckpt.pathspec
         # TODO [POST-RELEASE]: Suport out of task checkpoints
-        datastore = ReadResolver.from_key_and_pathspec(pathspec, key)
+        datastore = ReadResolver.from_checkpoint(_chckpt)
         obj = cls(
             datastore=datastore,
             attempt=_chckpt.attempt,
@@ -254,6 +267,14 @@ class ScopeResolver:
         return sha256(tags[0].split(":")[1].encode()).hexdigest()[:MAX_HASH_LEN]
 
 
+def warning_message(message, logger=None, ts=False, prefix="[@checkpoint][warning]"):
+    msg = "%s %s" % (prefix, message)
+    if logger:
+        logger(msg, timestamp=ts, bad=True)
+    else:
+        print(msg, file=sys.stderr)
+
+
 class ReadResolver:
     """
     Responsible for instantiating the `CheckpointDatastore` during read operations
@@ -264,7 +285,30 @@ class ReadResolver:
     def from_pathspec(cls, pathspec):
         # This resolver helps create the datastore when the user is calling `Checkpoint.list`
         # from a notebook or a script
-        storage_backend = resolve_task_storage_backend(pathspec=pathspec)
+        validation, storage_backend = resolve_task_storage_backend(pathspec=pathspec)
+        if not validation.is_valid:
+            if validation.needs_external_context:
+                warning_message(
+                    (
+                        "The Task (%s) used an external datastore for storing checkpoints. "
+                        "While the current execution context is configured to use the default datastore, "
+                        "this means that some of the artifacts might not be accessible. "
+                        "Please use the `artifact_store_from` context manager to configure the "
+                        "external datastore."
+                    )
+                    % pathspec
+                )
+            elif validation.context_mismatch:
+                warning_message(
+                    (
+                        "The current datastore context set via `artifact_store_from` context manager"
+                        "doesn't match the artifact store set in the task metadata of task (%s). "
+                        "This means that some objects might not be accessible under the context manager."
+                        "If the Flow was not using `@with_artifact_store` context manager, "
+                        "then remove the `artifact_store_from` context manager in your user code."
+                    )
+                    % pathspec
+                )
         _checkpoint_datastore = CheckpointDatastore.init_read_store(
             storage_backend, pathspec=pathspec
         )
@@ -280,19 +324,20 @@ class ReadResolver:
         return _checkpoint_datastore
 
     @classmethod
-    def from_key_and_pathspec(cls, pathspec, checkpoint_key):
+    def from_checkpoint(cls, checkpoint: "CheckpointArtifact"):
         """ """
-        storage_backend = resolve_task_storage_backend(pathspec=pathspec)
+        storage_backend = init_datastorage_object()
         _checkpoint_datastore = CheckpointDatastore.init_read_store(
-            storage_backend, checkpoint_key=checkpoint_key
+            storage_backend,
+            checkpoint_key=checkpoint.key,
         )
         return _checkpoint_datastore
 
     @classmethod
     def from_key_and_run(cls, run, checkpoint_key) -> CheckpointDatastore:
         """ """
-        storage_backend = flowspec_utils.resolve_storage_backend(
-            run=run,
+        storage_backend = storage_backend_from_flow(
+            flow=run,
         )
         _checkpoint_datastore = CheckpointDatastore.init_read_store(
             storage_backend, checkpoint_key=checkpoint_key
@@ -349,7 +394,7 @@ class WriteResolver:
             _resolver_info.step,
             _resolver_info.taskid,
         )
-        storage_backend = resolve_task_storage_backend(pathspec=pathspec)
+        storage_backend = init_datastorage_object()
         _checkpoint_datastore = CheckpointDatastore.init_write_store(
             storage_backend,
             pathspec=pathspec,
@@ -372,8 +417,8 @@ class WriteResolver:
         depends on if the task is being gang scheduled or not.
         """
 
-        storage_backend = flowspec_utils.resolve_storage_backend(
-            run=run,
+        storage_backend = storage_backend_from_flow(
+            flow=run,
         )
         identifier = task_identifier
         resolved_pathspec_info = flowspec_utils.resolve_pathspec_for_flowspec(

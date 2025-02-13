@@ -131,17 +131,7 @@ class Checkpoint:
             # If the `Checkpoint` object is being used by `CurrentCheckpointer` then we have already set the `_checkpointer`
             # attribute. If it is not being set by `CurrentCheckpointer` then the user might be calling it in an outside
             # process or within main process. So we try to instantiate it for writes.
-            try:
-                self = _instantiate_checkpoint_for_writes(self)
-            except ValueError as e:
-                raise CheckpointException(
-                    (
-                        "`Checkpoint.save` can only be called within a Metaflow Task execution. If you"
-                        "are calling `Checkpoint.save` outside a Metaflow Task process, ensure that you inherit"
-                        "the environment variables from the Metaflow Task process or pass the `METAFLOW_CHECKPOINT_UID`"
-                        "environment variable from the Metaflow Task process to your subprocess."
-                    )
-                )
+            self = self._init_checkpoint_for_writes(self)
 
         if metadata is None:
             metadata = {}
@@ -152,6 +142,27 @@ class Checkpoint:
             latest=latest,
             storage_format=storage_format,
         ).to_dict()
+
+    @classmethod
+    def _init_checkpoint_for_writes(cls, self):
+        try:
+            self = _instantiate_checkpoint_for_writes(self)
+        except ValueError as e:
+            raise CheckpointException(
+                (
+                    "`Checkpoint.save` can only be called within a Metaflow Task execution. If you "
+                    "are calling `Checkpoint.save` outside a Metaflow Task process, the @checkpoint decorator "
+                    "is set on the @step calling this method. If the decorator is set, then ensure that you inherit "
+                    "the environment variables from the Metaflow Task process or pass the `METAFLOW_CHECKPOINT_UID` "
+                    "environment variable from the Metaflow Task process to your subprocess."
+                )
+            )
+        return self
+
+    def generate_key(self, name: str, version_id: int = None):
+        if self._checkpointer is None:
+            self = self._init_checkpoint_for_writes(self)
+        return self._checkpointer.artifact_id(name, version_id)
 
     def __enter__(self):
         if self._checkpoint_dir is None:
@@ -324,7 +335,7 @@ class Checkpoint:
         # Outcome : (C3)
         _checkpointer = self._checkpointer
         if _checkpointer is None:
-            self = _instantiate_checkpoint_for_writes(self)
+            self = self._init_checkpoint_for_writes(self)
             _checkpointer = self._checkpointer
 
         # Since at this point we know the user is calling `current.checkpoint.list`

@@ -12,6 +12,12 @@ STEP_DECORATORS_DESC = [
         ".machine_learning_utilities.hf_hub.decorator.HuggingfaceHubDecorator",
     ),
 ]
+FLOW_DECORATORS_DESC = [
+    (
+        "with_artifact_store",
+        ".machine_learning_utilities.datastore.decorator.ArtifactStoreFlowDecorator",
+    )
+]
 DATASTORES_DESC = [
     (
         "s3-compatible",

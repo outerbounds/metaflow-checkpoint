@@ -123,7 +123,7 @@ class ObjectStorage(object):
         path_components: List,  # artifacts/flow_name/step_name/scope/task_identifier
     ):
         self._backend: DataStoreStorage = storage_backend
-        self._storage_root = self.resolve_root(self._backend.TYPE)
+        self._storage_root = self._backend.datastore_root
         self._path_components = path_components
         self.set_full_prefix(root_prefix)
         self._inject_methods_to_storage_backend()
@@ -178,29 +178,6 @@ class ObjectStorage(object):
     def set_full_prefix(self, root_prefix):
         self.FULL_PREFIX = os.path.join(root_prefix, "/".join(self._path_components))
 
-    @staticmethod
-    def resolve_root(storage_type):
-        if storage_type == "s3":
-            from metaflow.metaflow_config import DATASTORE_SYSROOT_S3
-
-            return DATASTORE_SYSROOT_S3
-        elif storage_type == "azure":
-            from metaflow.metaflow_config import DATASTORE_SYSROOT_AZURE
-
-            return DATASTORE_SYSROOT_AZURE
-        elif storage_type == "gs":
-            from metaflow.metaflow_config import DATASTORE_SYSROOT_GS
-
-            return DATASTORE_SYSROOT_GS
-        elif storage_type == "local":
-            return LocalStorage.get_datastore_root_from_config(
-                lambda x: x, create_on_absent=True
-            )
-        else:
-            raise NotImplementedError(
-                "Datastore is not support backend %s" % (storage_type)
-            )
-
     def full_base_url(self, prefix=None):
         if prefix is None:
             return self._storage_root
@@ -220,7 +197,7 @@ class ObjectStorage(object):
         # If the storage type is s3, then the root is just the `FULL_PREFIX`
         # because the S3Storage object uses as S3 client which has the
         # root already set.
-        if self._backend.TYPE != "s3":
+        if self._backend.TYPE != "s3" and self._backend.TYPE != "s3-compatible":
             path_prefix = self.full_base_url(prefix=path_prefix)
 
         return self.FULL_PREFIX
@@ -455,6 +432,16 @@ class ObjectStorage(object):
     def _load_metadata(self, key):
         return json.loads(self.get(key).blob)
 
+    def __str__(self) -> str:
+        return f"""
+        ObjectStorage:
+            - Backend: {self._backend.TYPE}
+            - Path Components: {self._path_components}
+            - Full Prefix: {self.FULL_PREFIX}
+            - Datastore Root: {self._backend.datastore_root}
+
+        """
+
 
 class DatastoreInterface:
     """
@@ -509,7 +496,3 @@ class DatastoreInterface:
     @classmethod
     def init_write_store(cls, storage_backend: DataStoreStorage, *args, **kwargs):
         raise NotImplementedError
-
-
-def resolve_root(datastore_type):
-    return ObjectStorage.resolve_root(datastore_type)
