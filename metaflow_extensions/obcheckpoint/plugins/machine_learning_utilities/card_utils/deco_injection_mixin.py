@@ -20,7 +20,7 @@ class CardDecoratorInjector:
     def _card_deco_already_attached(self, step, card_id):
         for decorator in step.decorators:
             if decorator.name == "card":
-                if decorator.attributes["id"] and card_id in decorator.attributes["id"]:
+                if decorator.attributes["id"] and card_id == decorator.attributes["id"]:
                     return True
         return False
 
