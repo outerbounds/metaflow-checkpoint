@@ -22,7 +22,11 @@ DATASTORES_DESC = [
     (
         "s3-compatible",
         ".datastores.s3_compat.S3CompatibleStorage",
-    )
+    ),
+    (
+        "coreweave",
+        ".datastores.s3_compat.CoreweaveStorage",
+    ),
 ]
 ###
 # CONFIGURE: Similar to datatools, you can make visible under metaflow.plugins.* other

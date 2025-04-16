@@ -1,12 +1,29 @@
 from metaflow.plugins.datastores.s3_storage import S3Storage
+from typing import TYPE_CHECKING
+import uuid
 
 import os
+from metaflow.plugins.storage_executor import (
+    StorageExecutor,
+    handle_executor_exceptions,
+)
 
 from itertools import starmap
 
-from metaflow.plugins.datatools.s3.s3 import S3, S3Client, S3PutObject, check_s3_deps
-from metaflow.metaflow_config import DATASTORE_SYSROOT_S3, ARTIFACT_LOCALROOT
+
+from metaflow.plugins.datatools.s3.s3 import (
+    S3,
+    S3Client,
+    S3PutObject,
+    check_s3_deps,
+    MetaflowS3NotFound,
+)
+from metaflow.metaflow_config import DATASTORE_SYSROOT_S3, ARTIFACT_LOCALROOT, TEMPDIR
 from metaflow.datastore.datastore_storage import CloseAfterUse, DataStoreStorage
+
+import tempfile
+from concurrent.futures import as_completed
+import shutil
 
 
 try:
@@ -229,3 +246,92 @@ class S3CompatibleStorage(S3Storage):
                         yield r.key, None, None
 
         return CloseAfterUse(iter_results(), closer=s3)
+
+
+def _load_bytes_single_cw(
+    role_arn, session_vars, client_params, dir_path, s3_path, _key
+):
+    from boto3.session import Session
+    from botocore.exceptions import ClientError
+    from botocore.config import Config
+
+    session = Session()
+    if client_params is None:
+        client_params = {}
+
+    _client_params = client_params.copy()
+    if _client_params.get("config") and type(_client_params["config"]) == dict:
+        _client_params["config"] = Config(**_client_params["config"])
+
+    client = session.client("s3", **_client_params)
+    bucket = urlparse(s3_path).netloc
+    key = urlparse(s3_path).path.lstrip("/")
+    tmp_filename = os.path.join(dir_path, str(uuid.uuid4()))
+    try:
+        client.download_file(Bucket=bucket, Key=key, Filename=tmp_filename)
+    except ClientError as e:
+        if e.response["Error"]["Code"] == "404":
+            return _key, None, None
+        else:
+            raise
+    return _key, tmp_filename, None
+
+
+class CoreweaveStorage(S3CompatibleStorage):
+    TYPE = "coreweave"
+
+    def __init__(self, root=None, session_vars=None, role_arn=None, client_params=None):
+        super(CoreweaveStorage, self).__init__(
+            root, session_vars, role_arn, client_params
+        )
+        from metaflow import get_aws_client
+
+        self._get_aws_client = get_aws_client
+        # Executor needs to be thread based since boto3 will have issues in a processbased executor.
+        self._executor = StorageExecutor(use_processes=False)
+
+    @handle_executor_exceptions
+    def load_bytes(self, paths, temp_dir_root=None):
+        if len(paths) == 0:
+            return CloseAfterUse(iter([]))
+
+        if temp_dir_root is None:
+            temp_dir_root = ARTIFACT_LOCALROOT
+
+        tmpdir = tempfile.mkdtemp(
+            suffix=None,
+            prefix="metaflow.coreweave.load_bytes.",
+            dir=temp_dir_root,
+        )
+        full_paths = [os.path.join(self.datastore_root, key) for key in paths]
+
+        try:
+            futures = [
+                self._executor.submit(
+                    _load_bytes_single_cw,
+                    self._s3_role_arn,
+                    self._s3_session_vars,
+                    self._s3_client_params,
+                    tmpdir,
+                    s3_path,
+                    key,
+                )
+                for s3_path, key in zip(full_paths, paths)
+            ]
+
+            items = [future.result() for future in as_completed(futures)]
+        except Exception:
+            if os.path.exists(tmpdir):
+                shutil.rmtree(tmpdir)
+            raise
+
+        class _Closer(object):
+            @staticmethod
+            def close():
+                if os.path.isdir(tmpdir):
+                    shutil.rmtree(tmpdir)
+
+        return CloseAfterUse(iter(items), closer=_Closer)
+
+    def load_files(self, keys):
+        return self.load_bytes(keys, temp_dir_root=TEMPDIR)

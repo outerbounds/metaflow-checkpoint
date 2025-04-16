@@ -29,6 +29,7 @@ import json
 DatastoreBlob = namedtuple("DatastoreBlob", "blob url path")
 ListPathResult = namedtuple("ListPathResult", "full_url key")
 COMPRESSION_METHOD = None
+COMPATIBLE_BACKENDS = ["s3", "s3-compatible", "coreweave"]
 
 
 class STORAGE_FORMATS:
@@ -197,7 +198,8 @@ class ObjectStorage(object):
         # If the storage type is s3, then the root is just the `FULL_PREFIX`
         # because the S3Storage object uses as S3 client which has the
         # root already set.
-        if self._backend.TYPE != "s3" and self._backend.TYPE != "s3-compatible":
+
+        if self._backend.TYPE not in COMPATIBLE_BACKENDS:
             path_prefix = self.full_base_url(prefix=path_prefix)
 
         return self.FULL_PREFIX
@@ -274,12 +276,12 @@ class ObjectStorage(object):
         "List all objects in the datastore's `keys` index."
 
         def _full_url_convert(lcr_path):
-            if self._backend.TYPE == "s3":
+            if self._backend.TYPE in COMPATIBLE_BACKENDS:
                 return os.path.join(self.full_base_url(), lcr_path)
             return lcr_path
 
         def _relative_url_convert(lcr_path):
-            if self._backend.TYPE == "s3":
+            if self._backend.TYPE in COMPATIBLE_BACKENDS:
                 return lcr_path
             np = lcr_path.replace(self.full_base_url(), "")
             if np.startswith("/"):
