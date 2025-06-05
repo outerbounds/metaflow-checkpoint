@@ -392,11 +392,94 @@ class Factory:
         return obj_type._load_metadata_from_key(key_object, storage_backend)
 
 
-# This will be the core user facing function that will help load stuff
 def load_model(
     reference: Union[str, MetaflowDataArtifactReference, dict],
     path: str,
 ):
+    """
+    Load a model or checkpoint from Metaflow's datastore to a local path.
+
+    This function provides a convenient way to load models and checkpoints that were previously saved using `@model`, `@checkpoint`, or `@huggingface_hub` decorators, either from within a Metaflow task or externally using the Run API.
+
+    Parameters
+    ----------
+    reference : Union[str, MetaflowDataArtifactReference, dict]
+        The reference to the model/checkpoint to load. This can be A string key (e.g., "model/my_model_abc123") OR A MetaflowDataArtifactReference object OR a dictionary artifact reference (e.g., self.my_model from a previous step)
+    path : str
+        The local filesystem path where the model/checkpoint should be loaded. The directory will be created if it doesn't exist.
+
+    Raises
+    ------
+    ValueError
+        If reference or path is None
+    KeyNotCompatibleException
+        If the reference key is not compatible with supported artifact types
+
+    Examples
+    --------
+    **Loading within a Metaflow task:**
+
+    ```python
+    from metaflow import FlowSpec, step
+
+
+    class MyFlow(FlowSpec):
+        @model
+        @step
+        def train(self):
+            # Save a model
+            self.my_model = current.model.save(
+                "/path/to/trained/model",
+                label="trained_model"
+            )
+            self.next(self.evaluate)
+
+        @step
+        def evaluate(self):
+            from metaflow import load_model
+            # Load the model using the artifact reference
+            load_model(self.my_model, "/tmp/loaded_model")
+            # Model is now available at /tmp/loaded_model
+            self.next(self.end)
+    ```
+
+    **Loading externally using Metaflow's Run API:**
+
+    ```python
+    from metaflow import Run
+    from metaflow import load_model
+
+    # Get a reference to a completed run
+    run = Run("MyFlow/123")
+
+    # Load using artifact reference from a step
+    task_model_ref = run["train"].task.data.my_model
+    load_model(task_model_ref, "/local/path/to/model")
+
+    model_ref = run.data.my_model
+    load_model(model_ref, "/local/path/to/model")
+    ```
+
+    **Loading HuggingFace models:**
+
+    ```python
+    # If you saved a HuggingFace model reference
+    @huggingface_hub
+    @step
+    def download_hf_model(self):
+        self.hf_model = current.huggingface_hub.snapshot_download(
+            repo_id="mistralai/Mistral-7B-Instruct-v0.1"
+        )
+        self.next(self.use_model)
+
+    @step
+    def use_model(self):
+        from metaflow import load_model
+        # Load the HuggingFace model
+        load_model(self.hf_model, "/tmp/mistral_model")
+        # Model files are now available at /tmp/mistral_model
+    ```
+    """
     if reference is None:
         raise ValueError("`load_model` requires a reference")
     if path is None:

@@ -76,7 +76,10 @@ class Checkpoint:
             self._checkpoint_dir = tempfile.TemporaryDirectory(dir=self._temp_dir_root)
 
     @property
-    def directory(self):
+    def directory(self) -> Optional[str]:
+        """
+        The directory where a checkpoint is loaded
+        """
         if self._checkpoint_dir is None:
             return None
         return self._checkpoint_dir.name
@@ -185,19 +188,12 @@ class Checkpoint:
         """
         lists the checkpoints in the current task or the specified task.
 
-        When users call `list` without any arguments, it will list all the checkpoints in the currently executing
-        task (this includes all attempts). If the `list` method is called without any arguments outside a Metaflow Task execution context,
-        it will raise an exception. Users can also call `list` with `attempt` argument to list all checkpoints within a
-        the specific attempt of the currently executing task.
+        When users call `list` without any arguments, it will list all the checkpoints in the currently executing task (this includes all attempts). If the `list` method is called without any arguments outside a Metaflow Task execution context, it will raise an exception. Users can also call `list` with `attempt` argument to list all checkpoints within a the specific attempt of the currently executing task.
 
-        When a `task` argument is provided, the `list` method will return all the checkpoints
-        for a task's latest attempt unless a specific attempt number is set in the `attempt` argument.
-        If the `Task` object contains a `DataArtifact` with all the previous checkpoints, then the `list` method will return
-        all the checkpoints from the data artifact. If for some reason the DataArtifact is not written, then the `list` method will
-        return all checkpoints directly from the checkpoint's datastore.
+        When a `task` argument is provided, the `list` method will return all the checkpoints for a task's latest attempt unless a specific attempt number is set in the `attempt` argument. If the `Task` object contains a `DataArtifact` with all the previous checkpoints, then the `list` method will return all the checkpoints from the data artifact. If for some reason the DataArtifact is not written, then the `list` method will return all checkpoints directly from the checkpoint's datastore.
 
-        Usage:
-        ------
+        Examples
+        --------
 
         ```python
 

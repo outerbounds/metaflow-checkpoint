@@ -39,17 +39,55 @@ class ModelDecorator(StepDecorator):
     ----------
     load : Union[List[str],str,List[Tuple[str,Union[str,None]]]], default: None
         Artifact name/s referencing the models/checkpoints to load. Artifact names refer to the names of the instance variables set to `self`.
-        These artifact names give to `load` be reference objects or reference `key` string's from objects created by:
-        - `current.checkpoint`
-        - `current.model`
-        - `current.huggingface_hub`
-
+        These artifact names give to `load` be reference objects or reference `key` string's from objects created by `current.checkpoint` / `current.model` / `current.huggingface_hub`.
         If a list of tuples is provided, the first element is the artifact name and the second element is the path the artifact needs be unpacked on
         the local filesystem. If the second element is None, the artifact will be unpacked in the current working directory.
         If a string is provided, then the artifact corresponding to that name will be loaded in the current working directory.
 
     temp_dir_root : str, default: None
         The root directory under which `current.model.loaded` will store loaded models
+
+    Examples
+    --------
+    - Saving Models
+    ```python
+    @model
+    @step
+    def train(self):
+        # current.model.save returns a dictionary reference to the model saved
+        self.my_model = current.model.save(
+            path_to_my_model,
+            label="my_model",
+            metadata={
+                "epochs": 10,
+                "batch-size": 32,
+                "learning-rate": 0.001,
+            }
+        )
+        self.next(self.test)
+
+    @model(load="my_model")
+    @step
+    def test(self):
+        # `current.model.loaded` returns a dictionary of the loaded models
+        # where the key is the name of the artifact and the value is the path to the model
+        print(os.listdir(current.model.loaded["my_model"]))
+        self.next(self.end)
+    ```
+
+    - Loading models
+    ```python
+    @step
+    def train(self):
+        # current.model.load returns the path to the model loaded
+        checkpoint_path = current.model.load(
+            self.checkpoint_key,
+        )
+        model_path = current.model.load(
+            self.model,
+        )
+        self.next(self.test)
+    ```
 
 
     MF Add To Current
@@ -60,53 +98,8 @@ class ModelDecorator(StepDecorator):
         `current.model.loaded` exposes the paths to the models loaded via the `load` argument in the @model decorator
         or models loaded via `current.model.load`.
 
-        Usage (Saving a model):
-        -------
-
-        ```
-        @model
-        @step
-        def train(self):
-            # current.model.save returns a dictionary reference to the model saved
-            self.my_model = current.model.save(
-                path_to_my_model,
-                label="my_model",
-                metadata={
-                    "epochs": 10,
-                    "batch-size": 32,
-                    "learning-rate": 0.001,
-                }
-            )
-            self.next(self.test)
-
-        @model(load="my_model")
-        @step
-        def test(self):
-            # `current.model.loaded` returns a dictionary of the loaded models
-            # where the key is the name of the artifact and the value is the path to the model
-            print(os.listdir(current.model.loaded["my_model"]))
-            self.next(self.end)
-        ```
-
-        Usage (Loading models):
-        -------
-
-        ```
-        @step
-        def train(self):
-            # current.model.load returns the path to the model loaded
-            checkpoint_path = current.model.load(
-                self.checkpoint_key,
-            )
-            model_path = current.model.load(
-                self.model,
-            )
-            self.next(self.test)
-        ```
-
-
         @@ Returns
-        -------
+        ----------
         ModelSerializer
             The object used for loading / saving models.
     """
