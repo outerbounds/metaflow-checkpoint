@@ -390,6 +390,7 @@ class ObjectStorage(object):
         keys = [p.key for p in list_path_results]
         # We directly call load bytes here because `self.get_file` will add the root of the datastore
         # to the path and we don't want that.
+        _load_func = shutil.move if self._backend.TYPE != "local" else os.symlink
         with self._backend.load_files(keys) as get_results:
             for list_key, path, meta in get_results:
                 if path is None:
@@ -404,7 +405,7 @@ class ObjectStorage(object):
                 # to be preserved when we download the objects on local.
                 move_to_path = os.path.join(local_directory, path_within_dir)
                 Path(move_to_path).parent.mkdir(parents=True, exist_ok=True)
-                shutil.move(
+                _load_func(
                     path,
                     move_to_path,
                 )
