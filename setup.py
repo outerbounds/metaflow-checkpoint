@@ -10,7 +10,7 @@ def get_long_description() -> str:
 
 
 setup(
-    name="metaflow-checkpoint",
+    name="metaflow_checkpoint",
     version=version,
     description="An EXPERIMENTAL checkpoint decorator for Metaflow",
     author="Valay Dave",
