@@ -228,7 +228,7 @@ class Checkpoint:
         List[Dict]
         """
 
-        def _sort_checkpoints_by_version(dicts: list[Union[Dict, CheckpointArtifact]]):
+        def _sort_checkpoints_by_version(dicts: List[Union[Dict, CheckpointArtifact]]):
             def _get_version_id(x: Union[Dict, CheckpointArtifact]):
                 if isinstance(x, CheckpointArtifact):
                     return x.version_id
