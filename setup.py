@@ -1,6 +1,7 @@
 from setuptools import setup, find_namespace_packages
 
-version = "0.2.2"
+with open("metaflow_extensions/obcheckpoint/toplevel/version.py", mode="r") as f:
+    version = f.read().splitlines()[0].split("=")[1].strip(" \"'")
 
 
 def get_long_description() -> str:
