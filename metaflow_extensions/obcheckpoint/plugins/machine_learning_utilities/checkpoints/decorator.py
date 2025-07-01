@@ -390,25 +390,8 @@ class CheckpointDecorator(StepDecorator):
     """
     Enables checkpointing for a step.
 
+    > Examples
 
-    Parameters
-    ----------
-    load_policy : str, default: "fresh"
-        The policy for loading the checkpoint. The following policies are supported:
-            - "eager": Loads the the latest available checkpoint within the namespace.
-            With this mode, the latest checkpoint written by any previous task (can be even a different run) of the step
-            will be loaded at the start of the task.
-            - "none": Do not load any checkpoint
-            - "fresh": Loads the lastest checkpoint created within the running Task.
-            This mode helps loading checkpoints across various retry attempts of the same task.
-            With this mode, no checkpoint will be loaded at the start of a task but any checkpoints
-            created within the task will be loaded when the task is retries execution on failure.
-
-    temp_dir_root : str, default: None
-        The root directory under which `current.checkpoint.directory` will be created.
-
-    Examples
-    --------
     - Saving Checkpoints
 
     ```python
@@ -452,6 +435,23 @@ class CheckpointDecorator(StepDecorator):
         for i in range(self.epochs):
             ...
     ```
+
+    Parameters
+    ----------
+    load_policy : str, default: "fresh"
+        The policy for loading the checkpoint. The following policies are supported:
+            - "eager": Loads the the latest available checkpoint within the namespace.
+            With this mode, the latest checkpoint written by any previous task (can be even a different run) of the step
+            will be loaded at the start of the task.
+            - "none": Do not load any checkpoint
+            - "fresh": Loads the lastest checkpoint created within the running Task.
+            This mode helps loading checkpoints across various retry attempts of the same task.
+            With this mode, no checkpoint will be loaded at the start of a task but any checkpoints
+            created within the task will be loaded when the task is retries execution on failure.
+
+    temp_dir_root : str, default: None
+        The root directory under which `current.checkpoint.directory` will be created.
+
 
     MF Add To Current
     -----------------

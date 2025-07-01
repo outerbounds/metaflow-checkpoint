@@ -34,21 +34,7 @@ class ModelDecorator(StepDecorator):
     """
     Enables loading / saving of models within a step.
 
-
-    Parameters
-    ----------
-    load : Union[List[str],str,List[Tuple[str,Union[str,None]]]], default: None
-        Artifact name/s referencing the models/checkpoints to load. Artifact names refer to the names of the instance variables set to `self`.
-        These artifact names give to `load` be reference objects or reference `key` string's from objects created by `current.checkpoint` / `current.model` / `current.huggingface_hub`.
-        If a list of tuples is provided, the first element is the artifact name and the second element is the path the artifact needs be unpacked on
-        the local filesystem. If the second element is None, the artifact will be unpacked in the current working directory.
-        If a string is provided, then the artifact corresponding to that name will be loaded in the current working directory.
-
-    temp_dir_root : str, default: None
-        The root directory under which `current.model.loaded` will store loaded models
-
-    Examples
-    --------
+    > Examples
     - Saving Models
     ```python
     @model
@@ -88,6 +74,18 @@ class ModelDecorator(StepDecorator):
         )
         self.next(self.test)
     ```
+
+    Parameters
+    ----------
+    load : Union[List[str],str,List[Tuple[str,Union[str,None]]]], default: None
+        Artifact name/s referencing the models/checkpoints to load. Artifact names refer to the names of the instance variables set to `self`.
+        These artifact names give to `load` be reference objects or reference `key` string's from objects created by `current.checkpoint` / `current.model` / `current.huggingface_hub`.
+        If a list of tuples is provided, the first element is the artifact name and the second element is the path the artifact needs be unpacked on
+        the local filesystem. If the second element is None, the artifact will be unpacked in the current working directory.
+        If a string is provided, then the artifact corresponding to that name will be loaded in the current working directory.
+
+    temp_dir_root : str, default: None
+        The root directory under which `current.model.loaded` will store loaded models
 
 
     MF Add To Current

@@ -324,37 +324,8 @@ class HuggingfaceHubDecorator(CheckpointDecorator):
     """
     Decorator that helps cache, version and store models/datasets from huggingface hub.
 
-    Parameters
-    ----------
-    temp_dir_root : str, optional
-        The root directory that will hold the temporary directory where objects will be downloaded.
+    > Examples
 
-    load: Union[List[str], List[Tuple[Dict, str]], List[Tuple[str, str]], List[Dict], None]
-        The list of repos (models/datasets) to load.
-
-        Loaded repos can be accessed via `current.huggingface_hub.loaded`. If load is set, then the following happens:
-
-        - If repo (model/dataset) is not found in the datastore:
-            - Downloads the repo from Hugging Face Hub to a temporary directory (or uses specified path) for local access
-            - Stores it in Metaflow's datastore (s3/gcs/azure etc.) with a unique name based on repo_type/repo_id
-                - All HF models loaded for a `@step` will be cached separately under flow/step/namespace.
-
-        - If repo is found in the datastore:
-            - Loads it directly from datastore to local path (can be temporary directory or specified path)
-
-
-    MF Add To Current
-    -----------------
-    huggingface_hub -> metaflow_extensions.obcheckpoint.plugins.machine_learning_utilities.hf_hub.decorator.HuggingfaceRegistry
-        The `@huggingface_hub` injects a `huggingface_hub` object into the `current` object. This object provides syntactic sugar
-        over [huggingface_hub](https://github.com/huggingface/huggingface_hub)'s
-        [snapshot_download](https://huggingface.co/docs/huggingface_hub/main/en/package_reference/file_download#huggingface_hub.snapshot_download) function.
-        The `current.huggingface_hub.snapshot_download` function downloads objects from huggingface hub and saves them to the Metaflow's datastore under the
-        `<repo_type>/<repo_id>` name. The `repo_type` is by default `model` and can be overriden by passing the `repo_type` parameter to the `snapshot_download` function.
-
-
-    Examples
-    --------
     **Usage: creating references of models from huggingface that may be loaded in downstream steps**
     ```python
         @huggingface_hub
@@ -407,6 +378,32 @@ class HuggingfaceHubDecorator(CheckpointDecorator):
             path_to_model = current.huggingface_hub.loaded["mistralai/Mistral-7B-Instruct-v0.1"]
             # path_to_model will be /my-directory
     ```
+
+    Parameters
+    ----------
+    temp_dir_root : str, optional
+        The root directory that will hold the temporary directory where objects will be downloaded.
+
+    load: Union[List[str], List[Tuple[Dict, str]], List[Tuple[str, str]], List[Dict], None]
+        The list of repos (models/datasets) to load.
+
+        Loaded repos can be accessed via `current.huggingface_hub.loaded`. If load is set, then the following happens:
+
+        - If repo (model/dataset) is not found in the datastore:
+            - Downloads the repo from Hugging Face Hub to a temporary directory (or uses specified path) for local access
+            - Stores it in Metaflow's datastore (s3/gcs/azure etc.) with a unique name based on repo_type/repo_id
+                - All HF models loaded for a `@step` will be cached separately under flow/step/namespace.
+
+        - If repo is found in the datastore:
+            - Loads it directly from datastore to local path (can be temporary directory or specified path)
+
+
+    MF Add To Current
+    -----------------
+    huggingface_hub -> metaflow_extensions.obcheckpoint.plugins.machine_learning_utilities.hf_hub.decorator.HuggingfaceRegistry
+
+        The `@huggingface_hub` injects a `huggingface_hub` object into the `current` object. This object provides syntactic sugar over [huggingface_hub](https://github.com/huggingface/huggingface_hub)'s [snapshot_download](https://huggingface.co/docs/huggingface_hub/main/en/package_reference/file_download#huggingface_hub.snapshot_download) function. The `current.huggingface_hub.snapshot_download` function downloads objects from huggingface hub and saves them to the Metaflow's datastore under the `<repo_type>/<repo_id>` name. The `repo_type` is by default `model` and can be overriden by passing the `repo_type` parameter to the `snapshot_download` function.
+
     """
 
     defaults = {
