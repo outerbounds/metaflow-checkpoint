@@ -58,19 +58,49 @@ class HuggingfaceRegistry:
     """
     This object provides syntactic sugar over [huggingface_hub](https://github.com/huggingface/huggingface_hub)'s [snapshot_download](https://huggingface.co/docs/huggingface_hub/main/en/package_reference/file_download#huggingface_hub.snapshot_download) function.
 
-    The `current.huggingface_hub.snapshot_download` function downloads objects from huggingface hub and saves them to the Metaflow's datastore under the `<repo_type>/<repo_id>` name. The `repo_type` is by default `model` and can be overriden by passing the `repo_type` parameter to the `snapshot_download` function.
+    The `current.huggingface_hub.snapshot_download` function downloads objects from the Hugging Face Hub and saves them in the Metaflow datastore under the `<repo_type>/<repo_id>` name. The `repo_type` defaults to `model` and can be overridden by passing the `repo_type` parameter to `snapshot_download`.
     """
 
     _checkpointer: CurrentCheckpointer = None
     _loaded_models: "HuggingfaceLoadedModels"
+    _cache_scope: str = "checkpoint"
 
     def __init__(self, logger) -> None:
         self._logger = logger
 
-    def _set_checkpointer(self, checkpointer: CurrentCheckpointer, temp_dir_root=None):
-        self._checkpointer = checkpointer
-        self._checkpointer._default_checkpointer._checkpointer.set_root_prefix(
+    def _override_based_on_cache_scope(
+        self, checkpointer: CurrentCheckpointer, cache_scope
+    ):
+        overrides = []
+        if cache_scope == "global":
+            overrides = [
+                "mf:internal",
+                "huggingface-hub",
+                "registry:global",
+                "fully-global",
+            ]
+        elif cache_scope == "flow":
+            overrides = [
+                "mf:internal",
+                "huggingface-hub",
+                "registry:flow",
+                checkpointer._flow_name,
+            ]
+        if len(overrides) > 0:
+            checkpointer._default_checkpointer._checkpointer.override_path_components(
+                path_components=overrides
+            )
+        checkpointer._default_checkpointer._checkpointer.set_root_prefix(
             HUGGINGFACE_HUB_ROOT_PREFIX
+        )
+        return checkpointer
+
+    def _set_checkpointer(
+        self, checkpointer: CurrentCheckpointer, temp_dir_root=None, cache_scope=None
+    ):
+        self._cache_scope = cache_scope
+        self._checkpointer = self._override_based_on_cache_scope(
+            checkpointer, cache_scope
         )
         self._loaded_models = HuggingfaceLoadedModels(
             checkpointer=self, logger=self._logger, temp_dir_root=temp_dir_root
@@ -80,6 +110,32 @@ class HuggingfaceRegistry:
     def loaded(self) -> "HuggingfaceLoadedModels":
         """This property provides a dictionary-like interface to access the local paths of the huggingface repos specified in the `load` argument of the `@huggingface_hub` decorator."""
         return self._loaded_models
+
+    def _scoped_name(self, repo_id, repo_type, hf_kwargs):
+        # All possible parameters that need a new unique instance in the cache.
+        keys_to_consider = [
+            "revision",
+            "ignore_patterns",
+            "allow_patterns",
+        ]
+        final_keys = [repo_type, repo_id]
+
+        if self._cache_scope != "checkpoint":
+            # For non-'checkpoint' scopes ('flow' and 'global'), include selected Hugging Face
+            # kwargs (revision, ignore_patterns, allow_patterns) in the cache key so that
+            # materially different downloads resolve to distinct cache entries.
+            #
+            # For 'checkpoint' scope we intentionally keep the original cache key format
+            # based only on repo_type/repo_id. Changing it to include the extra kwargs
+            # would cause cache-busts and force re-downloads for existing users.
+            # Not changing the cache name is acceptable because 'checkpoint'
+            # scope is already highly granular (namespace/flow/step/foreach-index),
+            # so omitting these kwargs does not harm correctness while
+            # preserving backward compatibility.
+            for k in keys_to_consider:
+                if k in hf_kwargs and hf_kwargs[k] is not None:
+                    final_keys.append(json.dumps(hf_kwargs[k], default=str))
+        return self._cache_name("/".join(final_keys))
 
     def _cache_name(self, name):
         return hashlib.md5(name.encode()).hexdigest()[:10]
@@ -97,7 +153,7 @@ class HuggingfaceRegistry:
         repo_name = kwargs["repo_id"]
         repo_type = kwargs.get("repo_type", "model")
         force_download = kwargs.get("force_download", False)
-        chckpt_name = self._cache_name("{}/{}".format(repo_type, repo_name))
+        chckpt_name = self._scoped_name(repo_name, repo_type, kwargs)
         chckpts = list(self._checkpointer.list(name=chckpt_name, full_namespace=True))
         if len(chckpts) > 0 and not force_download:
             return chckpts[0]
@@ -139,13 +195,13 @@ class HuggingfaceRegistry:
 
     def snapshot_download(self, **kwargs) -> dict:
         """
-        Downloads a model from huggingface hub and cache's it to the Metaflow's datastore.
-        It passes down all the parameters to the `huggingface_hub.snapshot_download` function.
+        Downloads a model from the Hugging Face Hub and caches it in the Metaflow datastore.
+        It passes all parameters to the `huggingface_hub.snapshot_download` function.
 
         Returns
         -------
         dict
-            A reference to the artifact that was saved/retrieved from the Metaflow's datastore.
+            A reference to the artifact saved to or retrieved from the Metaflow datastore.
         """
         if "repo_id" not in kwargs:
             raise ValueError("repo_id is required for snapshot_download")
@@ -226,7 +282,7 @@ class HuggingfaceLoadedModels:
 
     def _download_and_cache_model(self, repo_id, repo_type, path, **kwargs):
         """Download model from HF Hub and cache in datastore"""
-        chckpt_name = self._checkpointer._cache_name("{}/{}".format(repo_type, repo_id))
+        chckpt_name = self._checkpointer._scoped_name(repo_id, repo_type, kwargs)
         self._warn(
             "Downloading %s from huggingface to path %s" % (repo_id, path),
         )
@@ -271,7 +327,7 @@ class HuggingfaceLoadedModels:
             repo_type (str, optional): Type of repo (model/dataset)
             **kwargs: Additional arguments passed to snapshot_download
         """
-        chckpt_name = self._checkpointer._cache_name("{}/{}".format(repo_type, repo_id))
+        chckpt_name = self._checkpointer._scoped_name(repo_id, repo_type, kwargs)
         chckpts = list(
             self._checkpointer._checkpointer.list(name=chckpt_name, full_namespace=True)
         )
@@ -322,11 +378,11 @@ class HuggingfaceLoadedModels:
 
 class HuggingfaceHubDecorator(CheckpointDecorator):
     """
-    Decorator that helps cache, version and store models/datasets from huggingface hub.
+    Decorator that helps cache, version, and store models/datasets from the Hugging Face Hub.
 
     > Examples
 
-    **Usage: creating references of models from huggingface that may be loaded in downstream steps**
+    **Usage: creating references to models from the Hugging Face Hub that may be loaded in downstream steps**
     ```python
         @huggingface_hub
         @step
@@ -345,7 +401,7 @@ class HuggingfaceHubDecorator(CheckpointDecorator):
             self.next(self.train)
     ```
 
-    **Usage: loading models directly from huggingface hub or from cache (from metaflow's datastore)**
+    **Usage: loading models directly from the Hugging Face Hub or from cache (from Metaflow's datastore)**
     ```python
         @huggingface_hub(load=["mistralai/Mistral-7B-Instruct-v0.1"])
         @step
@@ -354,7 +410,7 @@ class HuggingfaceHubDecorator(CheckpointDecorator):
     ```
 
     ```python
-        @huggingface_hub(load=[("mistralai/Mistral-7B-Instruct-v0.1", "/my-directory"), ("myorg/mistral-lora, "/my-lora-directory")])
+        @huggingface_hub(load=[("mistralai/Mistral-7B-Instruct-v0.1", "/my-directory"), ("myorg/mistral-lora", "/my-lora-directory")])
         @step
         def finetune_model(self):
             path_to_model = current.huggingface_hub.loaded["mistralai/Mistral-7B-Instruct-v0.1"]
@@ -384,6 +440,37 @@ class HuggingfaceHubDecorator(CheckpointDecorator):
     temp_dir_root : str, optional
         The root directory that will hold the temporary directory where objects will be downloaded.
 
+    cache_scope : str, optional
+        The scope of the cache. Can be `checkpoint` / `flow` / `global`.
+
+        - `checkpoint` (default): All repos are stored like objects saved by `@checkpoint`.
+            i.e., the cached path is derived from the namespace, flow, step, and Metaflow foreach iteration.
+            Any repo downloaded under this scope will only be retrieved from the cache when the step runs under the same namespace in the same flow (at the same foreach index).
+
+        - `flow`: All repos are cached under the flow, regardless of namespace.
+            i.e., the cached path is derived solely from the flow name.
+            When to use this mode:
+                - Multiple users are executing the same flow and want shared access to the repos cached by the decorator.
+                - Multiple versions of a flow are deployed, all needing access to the same repos cached by the decorator.
+
+        - `global`: All repos are cached under a globally static path.
+            i.e., the base path of the cache is static and all repos are stored under it.
+            When to use this mode:
+                - All repos from the Hugging Face Hub need to be shared by users across all flow executions.
+
+        Each caching scope comes with its own trade-offs:
+        - `checkpoint`:
+            - Has explicit control over when caches are populated (controlled by the same flow that has the `@huggingface_hub` decorator) but ends up hitting the Hugging Face Hub more often if there are many users/namespaces/steps.
+            - Since objects are written on a `namespace/flow/step` basis, the blast radius of a bad checkpoint is limited to a particular flow in a namespace.
+        - `flow`:
+            - Has less control over when caches are populated (can be written by any execution instance of a flow from any namespace) but results in more cache hits.
+            - The blast radius of a bad checkpoint is limited to all runs of a particular flow.
+            - It doesn't promote cache reuse across flows.
+        - `global`:
+            - Has no control over when caches are populated (can be written by any flow execution) but has the highest cache hit rate.
+            - It promotes cache reuse across flows.
+            - The blast radius of a bad checkpoint spans every flow that could be using a particular repo.
+
     load: Union[List[str], List[Tuple[Dict, str]], List[Tuple[str, str]], List[Dict], None]
         The list of repos (models/datasets) to load.
 
@@ -402,13 +489,14 @@ class HuggingfaceHubDecorator(CheckpointDecorator):
     -----------------
     huggingface_hub -> metaflow_extensions.obcheckpoint.plugins.machine_learning_utilities.hf_hub.decorator.HuggingfaceRegistry
 
-        The `@huggingface_hub` injects a `huggingface_hub` object into the `current` object. This object provides syntactic sugar over [huggingface_hub](https://github.com/huggingface/huggingface_hub)'s [snapshot_download](https://huggingface.co/docs/huggingface_hub/main/en/package_reference/file_download#huggingface_hub.snapshot_download) function. The `current.huggingface_hub.snapshot_download` function downloads objects from huggingface hub and saves them to the Metaflow's datastore under the `<repo_type>/<repo_id>` name. The `repo_type` is by default `model` and can be overriden by passing the `repo_type` parameter to the `snapshot_download` function.
+        The `@huggingface_hub` decorator injects a `huggingface_hub` object into the `current` object. This provides syntactic sugar over [huggingface_hub](https://github.com/huggingface/huggingface_hub)'s [snapshot_download](https://huggingface.co/docs/huggingface_hub/main/en/package_reference/file_download#huggingface_hub.snapshot_download) function. The `current.huggingface_hub.snapshot_download` function downloads objects from the Hugging Face Hub and saves them in the Metaflow datastore under the `<repo_type>/<repo_id>` name. The `repo_type` defaults to `model` and can be overridden by passing the `repo_type` parameter to `snapshot_download`.
 
     """
 
     defaults = {
         "temp_dir_root": None,
         "load": None,  # Can be list of repo_ids or dicts with repo_id and other params
+        "cache_scope": "checkpoint",  # can be `checkpoint` / `flow` / `namespace` / `global`
     }
 
     name = "huggingface_hub"
@@ -420,6 +508,12 @@ class HuggingfaceHubDecorator(CheckpointDecorator):
         self._logger = logger
         self._chkptr = None
         self._collector_thread = None
+
+        if self.attributes.get("cache_scope") not in ["checkpoint", "flow", "global"]:
+            raise ValueError(
+                f"Invalid cache_scope for @huggingface_hub: {self.attributes.get('cache_scope')}. "
+                "Must be 'checkpoint', 'flow', or 'global'"
+            )
 
         self._registry = HuggingfaceRegistry(logger)
 
@@ -458,6 +552,8 @@ class HuggingfaceHubDecorator(CheckpointDecorator):
         )
         self._runid, self._step_name, self._task_id = run_id, step_name, task_id
         self._metadata_provider = metadata
+        self._cache_scope = self.attributes.get("cache_scope")
+
         # Handle loading models if load argument is provided
         load_models = self.attributes.get("load")
         if load_models is not None:
@@ -536,7 +632,11 @@ class HuggingfaceHubDecorator(CheckpointDecorator):
     def _setup_current(self):
         from metaflow import current
 
-        self._registry._set_checkpointer(self._chkptr)
+        self._registry._set_checkpointer(
+            self._chkptr,
+            cache_scope=self.attributes.get("cache_scope"),
+            temp_dir_root=self.attributes.get("temp_dir_root"),
+        )
         current._update_env({"huggingface_hub": self._registry})
 
     def task_decorate(

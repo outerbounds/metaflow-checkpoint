@@ -156,6 +156,9 @@ class CurrentCheckpointer:
             scope=resolved_scope,
             gang_scheduled_task=gang_scheduled_task,
         )
+        self._flow = flow
+        self._flow_name = flow.name
+        self._resolved_scope = resolved_scope
         os.environ[CHECKPOINT_TASK_IDENTIFIER_ENV_VAR_NAME] = self._task_identifier
         os.environ[CHECKPOINT_UID_ENV_VAR_NAME] = str(
             self._default_checkpointer._checkpointer._checkpoint_uid

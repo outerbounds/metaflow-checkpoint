@@ -312,6 +312,49 @@ class CheckpointDatastore(DatastoreInterface):
         return ".".join([str(a) for a in args])
 
     @classmethod
+    def init_global_registry_write_store(
+        cls,
+        storage_backend: DataStoreStorage,
+        pathspec,
+        artifact_store_path_components,
+    ):
+        """
+        The normal mode of operation ie (init_write_store) is a metaflow coupled mode of operation where we store the checkpoints based on metaflow based logic.
+
+        """
+        datastore = cls()
+        flow_name, runid, step_name, taskid = pathspec.split("/")
+
+        datastore.metadata_store = ObjectStorage(
+            storage_backend,
+            root_prefix=cls.ROOT_PREFIX,
+            path_components=[
+                "checkpoints",
+                METADATA_STORE_NAME,
+                flow_name,
+                runid,
+                step_name,
+                taskid,
+            ],
+        )
+        datastore.pathspec = pathspec
+        datastore._NAME_ENTROPY = pathspec_hash(pathspec)
+        datastore.artifact_store = ObjectStorage(
+            storage_backend,
+            root_prefix=cls.ROOT_PREFIX,
+            path_components=["checkpoints", ARTIFACT_STORE_NAME]
+            + artifact_store_path_components,
+        )
+
+        datastore.artifact_metadatastore = ObjectStorage(
+            storage_backend,
+            root_prefix=cls.ROOT_PREFIX,
+            path_components=["checkpoints", ARTIFACT_METADATA_STORE_NAME]
+            + artifact_store_path_components,
+        )
+        return datastore
+
+    @classmethod
     def init_write_store(
         cls,
         storage_backend: DataStoreStorage,

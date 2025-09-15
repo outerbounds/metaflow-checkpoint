@@ -58,6 +58,19 @@ class Checkpointer:
     def _set_current_version(self, version_id):
         self._current_version = version_id
 
+    def override_path_components(
+        self,
+        path_components: List[str],
+    ):
+        assert len(path_components) == 4
+        pathspec = self._checkpoint_datastore.pathspec
+        datastore = self._checkpoint_datastore.init_global_registry_write_store(
+            storage_backend=self._checkpoint_datastore.artifact_store._backend,
+            pathspec=pathspec,
+            artifact_store_path_components=path_components,
+        )
+        self._checkpoint_datastore = datastore
+
     def set_root_prefix(self, root_prefix):
         self._checkpoint_datastore.set_root_prefix(root_prefix)
 
