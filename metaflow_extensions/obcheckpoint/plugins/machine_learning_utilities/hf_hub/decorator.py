@@ -55,11 +55,7 @@ def download_model_from_huggingface(**kwargs):
 
 
 class HuggingfaceRegistry:
-    """
-    This object provides syntactic sugar over [huggingface_hub](https://github.com/huggingface/huggingface_hub)'s [snapshot_download](https://huggingface.co/docs/huggingface_hub/main/en/package_reference/file_download#huggingface_hub.snapshot_download) function.
-
-    The `current.huggingface_hub.snapshot_download` function downloads objects from the Hugging Face Hub and saves them in the Metaflow datastore under the `<repo_type>/<repo_id>` name. The `repo_type` defaults to `model` and can be overridden by passing the `repo_type` parameter to `snapshot_download`.
-    """
+    """ """
 
     _checkpointer: CurrentCheckpointer = None
     _loaded_models: "HuggingfaceLoadedModels"
@@ -148,6 +144,11 @@ class HuggingfaceRegistry:
         )
 
     def _load_or_cache_model(self, **kwargs) -> dict:
+        """
+        This function will:
+            1. return  a reference to the model it the datastore if found.
+            2. otherwise it will download the model, save to datastore and return refernce to that checkpoint in the datastore.
+        """
         from metaflow import current
 
         repo_name = kwargs["repo_id"]
@@ -206,6 +207,71 @@ class HuggingfaceRegistry:
         if "repo_id" not in kwargs:
             raise ValueError("repo_id is required for snapshot_download")
         return self._load_or_cache_model(**kwargs)
+
+    def load(self, repo_id=None, path=None, repo_type="model", **kwargs):
+        """
+        Context manager to load a Hugging Face repo (model/dataset) to a local path.
+
+        - If `path` is provided, the repo is loaded there and the same path is yielded.
+        - If `path` is not provided, a temporary directory is created, the repo is
+          loaded there, the path is yielded, and the directory is cleaned up when
+          the context exits.
+
+        Parameters
+        ----------
+        repo_id : str, optional
+            The Hugging Face repo ID. If omitted, must be provided via kwargs["repo_id"].
+        path : str, optional
+            Target directory to place files. If None, a temp directory is created.
+        repo_type : str, optional
+            Repo type (e.g., "model", "dataset"). Defaults to "model".
+        **kwargs : Any
+            Additional args forwarded to snapshot_download (e.g. force_download, revision,
+            allow_patterns, ignore_patterns, etc.).
+
+        Yields
+        ------
+        str
+            Local filesystem path where the repo is available.
+        """
+        # Lazy import to avoid top-level dependency on contextlib
+        from contextlib import contextmanager
+
+        if repo_id is None:
+            raise ValueError("repo_id is required for load()")
+        kwargs_copy = kwargs.copy()
+        repo_type = repo_type or "model"
+
+        @contextmanager
+        def _cm(resolved_repo_id, resolved_path, repo_type, kwargs_copy):
+            created_tempdir = None
+            try:
+                if resolved_path is None:
+                    # Build a deterministic prefix using the scoped cache name
+                    chckpt_name = self._scoped_name(
+                        resolved_repo_id, repo_type, {**kwargs_copy}
+                    )
+                    temp_dir_parent = self._loaded_models._temp_dir_root
+                    created_tempdir = tempfile.TemporaryDirectory(
+                        dir=temp_dir_parent, prefix=f"metaflow_hf_{chckpt_name}_"
+                    )
+                    target_path = created_tempdir.name
+                else:
+                    os.makedirs(resolved_path, exist_ok=True)
+                    target_path = resolved_path
+
+                model_path = self._loaded_models._load_model(
+                    resolved_repo_id,
+                    path=target_path,
+                    repo_type=repo_type,
+                    **kwargs_copy
+                )
+                yield model_path
+            finally:
+                if created_tempdir is not None:
+                    created_tempdir.cleanup()
+
+        return _cm(repo_id, path, repo_type, kwargs_copy)
 
 
 class HuggingfaceLoadedModels:
@@ -293,7 +359,7 @@ class HuggingfaceLoadedModels:
         download_model_from_huggingface(repo_id=repo_id, repo_type=repo_type, **kwargs)
 
         self._warn(
-            "Cached %s in datastore for namespace %s" % (repo_id, self._namespace),
+            "Caching %s in the datastore" % (repo_id),
         )
         # Save/cache in datastore
         chckpt_ref = self._checkpointer._checkpointer.save(
@@ -306,6 +372,10 @@ class HuggingfaceLoadedModels:
             },
             path=path,
             storage_format="files",
+        )
+
+        self._warn(
+            "Cached %s in the datastore with the key %s" % (repo_id, chckpt_ref["key"]),
         )
         return chckpt_ref
 
@@ -401,6 +471,22 @@ class HuggingfaceHubDecorator(CheckpointDecorator):
             self.next(self.train)
     ```
 
+    **Usage: explicitly loading models at runtime from the Hugging Face Hub or from cache (from Metaflow's datastore)**
+    ```python
+        @huggingface_hub
+        @step
+        def run_training(self):
+            # Temporary directory (auto-cleaned on exit)
+            with current.huggingface_hub.load(
+                repo_id="google-bert/bert-base-uncased",
+                allow_patterns=["*.bin"],
+            ) as local_path:
+                # Use files under local_path
+                train_model(local_path)
+                ...
+
+    ```
+
     **Usage: loading models directly from the Hugging Face Hub or from cache (from Metaflow's datastore)**
     ```python
         @huggingface_hub(load=["mistralai/Mistral-7B-Instruct-v0.1"])
@@ -489,7 +575,51 @@ class HuggingfaceHubDecorator(CheckpointDecorator):
     -----------------
     huggingface_hub -> metaflow_extensions.obcheckpoint.plugins.machine_learning_utilities.hf_hub.decorator.HuggingfaceRegistry
 
-        The `@huggingface_hub` decorator injects a `huggingface_hub` object into the `current` object. This provides syntactic sugar over [huggingface_hub](https://github.com/huggingface/huggingface_hub)'s [snapshot_download](https://huggingface.co/docs/huggingface_hub/main/en/package_reference/file_download#huggingface_hub.snapshot_download) function. The `current.huggingface_hub.snapshot_download` function downloads objects from the Hugging Face Hub and saves them in the Metaflow datastore under the `<repo_type>/<repo_id>` name. The `repo_type` defaults to `model` and can be overridden by passing the `repo_type` parameter to `snapshot_download`.
+        This object provides a thin, Metaflow-friendly layer over
+        [huggingface_hub]'s `snapshot_download`:
+
+        - Snapshot references (persist-and-reuse):
+            Use `current.huggingface_hub.snapshot_download(repo_id=..., ...)` to
+            ensure a repo is available in the Metaflow datastore. If absent, it is
+            downloaded once and saved; the call returns a reference dict you can
+            store and load later (for example via `@model`).
+
+        - On-demand local access (context manager):
+            Use `current.huggingface_hub.load(repo_id=..., [path=...], ...)` as a
+            context manager to obtain a local filesystem path for immediate use.
+            If the repo exists in the datastore, it is loaded from there;
+            otherwise it is fetched from the Hugging Face Hub and then cached in
+            the datastore. When `path` is omitted, a temporary directory is
+            created and cleaned up automatically when the context exits. When
+            `path` is provided, files are placed there and are not cleaned up by
+            the context manager.
+
+        Repos are cached in the datastore using the huggingface_hub.snapshot_download's arguments. The cache
+        key may include: `repo_id`, `repo_type`, `revision`, `ignore_patterns`,
+        and `allow_patterns` (see `cache_scope` for how keys are scoped).
+
+        Examples
+        --------
+        Snapshot reference:
+        ```python
+        ref = current.huggingface_hub.snapshot_download(
+            repo_id="google-bert/bert-base-uncased",
+            allow_patterns=["*.json"]
+        )
+        ```
+
+        Explicit Model Loading with Context manager:
+        ```python
+        with current.huggingface_hub.load(
+            repo_id="google-bert/bert-base-uncased",
+            allow_patterns=["*.json"]
+        ) as local_path:
+            my_model = torch.load(os.path.join(local_path, "model.bin"))
+        ```
+
+        @@ Returns
+        ----------
+        HuggingfaceRegistry
 
     """
 
