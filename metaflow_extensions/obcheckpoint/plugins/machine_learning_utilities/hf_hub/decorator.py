@@ -55,7 +55,34 @@ def download_model_from_huggingface(**kwargs):
 
 
 class HuggingfaceRegistry:
-    """ """
+    """
+    This object provides a thin, Metaflow-friendly layer over huggingface_hub's [snapshot_download](https://huggingface.co/docs/huggingface_hub/main/en/package_reference/file_download#huggingface_hub.snapshot_download):
+
+    - Snapshot references (persist-and-reuse): Use `current.huggingface_hub.snapshot_download(repo_id=..., ...)` to ensure a repo is available in the Metaflow datastore. If absent, it is downloaded once and saved; the call returns a reference dict you can store and load later (for example via `@model`).
+
+    - On-demand local access (context manager):  Use `current.huggingface_hub.load(repo_id=..., [path=...], ...)` as a context manager to obtain a local filesystem path for immediate use. If the repo exists in the datastore, it is loaded from there; otherwise it is fetched from the Hugging Face Hub and then cached in the datastore. When `path` is omitted, a temporary directory is created and cleaned up automatically when the context exits. When `path` is provided, files are placed there and are not cleaned up by the context manager.
+
+    Repos are cached in the datastore using the huggingface_hub.snapshot_download's arguments. The cache
+    key may include: `repo_id`, `repo_type`, `revision`, `ignore_patterns`,
+    and `allow_patterns` (see `cache_scope` for how keys are scoped).
+
+    Examples
+    --------
+    ```python
+    # Snapshot reference:
+    ref = current.huggingface_hub.snapshot_download(
+        repo_id="google-bert/bert-base-uncased",
+        allow_patterns=["*.json"]
+    )
+    # Explicit Model Loading with Context manager:
+
+    with current.huggingface_hub.load(
+        repo_id="google-bert/bert-base-uncased",
+        allow_patterns=["*.json"]
+    ) as local_path:
+        my_model = torch.load(os.path.join(local_path, "model.bin"))
+    ```
+    """
 
     _checkpointer: CurrentCheckpointer = None
     _loaded_models: "HuggingfaceLoadedModels"
@@ -450,75 +477,69 @@ class HuggingfaceHubDecorator(CheckpointDecorator):
     """
     Decorator that helps cache, version, and store models/datasets from the Hugging Face Hub.
 
-    > Examples
-
-    **Usage: creating references to models from the Hugging Face Hub that may be loaded in downstream steps**
-    ```python
-        @huggingface_hub
-        @step
-        def pull_model_from_huggingface(self):
-            # `current.huggingface_hub.snapshot_download` downloads the model from the Hugging Face Hub
-            # and saves it in the backend storage based on the model's `repo_id`. If there exists a model
-            # with the same `repo_id` in the backend storage, it will not download the model again. The return
-            # value of the function is a reference to the model in the backend storage.
-            # This reference can be used to load the model in the subsequent steps via `@model(load=["llama_model"])`
-
-            self.model_id = "mistralai/Mistral-7B-Instruct-v0.1"
-            self.llama_model = current.huggingface_hub.snapshot_download(
-                repo_id=self.model_id,
-                allow_patterns=["*.safetensors", "*.json", "tokenizer.*"],
-            )
-            self.next(self.train)
-    ```
-
-    **Usage: explicitly loading models at runtime from the Hugging Face Hub or from cache (from Metaflow's datastore)**
-    ```python
-        @huggingface_hub
-        @step
-        def run_training(self):
-            # Temporary directory (auto-cleaned on exit)
-            with current.huggingface_hub.load(
-                repo_id="google-bert/bert-base-uncased",
-                allow_patterns=["*.bin"],
-            ) as local_path:
-                # Use files under local_path
-                train_model(local_path)
-                ...
-
-    ```
-
-    **Usage: loading models directly from the Hugging Face Hub or from cache (from Metaflow's datastore)**
-    ```python
-        @huggingface_hub(load=["mistralai/Mistral-7B-Instruct-v0.1"])
-        @step
-        def pull_model_from_huggingface(self):
-            path_to_model = current.huggingface_hub.loaded["mistralai/Mistral-7B-Instruct-v0.1"]
-    ```
+    Examples
+    --------
 
     ```python
-        @huggingface_hub(load=[("mistralai/Mistral-7B-Instruct-v0.1", "/my-directory"), ("myorg/mistral-lora", "/my-lora-directory")])
-        @step
-        def finetune_model(self):
-            path_to_model = current.huggingface_hub.loaded["mistralai/Mistral-7B-Instruct-v0.1"]
-            # path_to_model will be /my-directory
-    ```
+    # **Usage: creating references to models from the Hugging Face Hub that may be loaded in downstream steps**
+    @huggingface_hub
+    @step
+    def pull_model_from_huggingface(self):
+        # `current.huggingface_hub.snapshot_download` downloads the model from the Hugging Face Hub
+        # and saves it in the backend storage based on the model's `repo_id`. If there exists a model
+        # with the same `repo_id` in the backend storage, it will not download the model again. The return
+        # value of the function is a reference to the model in the backend storage.
+        # This reference can be used to load the model in the subsequent steps via `@model(load=["llama_model"])`
 
-    ```python
-        # Takes all the arguments passed to `snapshot_download`
-        # except for `local_dir`
-        @huggingface_hub(load=[
-            {
-                "repo_id": "mistralai/Mistral-7B-Instruct-v0.1",
-            },
-            {
-                "repo_id": "myorg/mistral-lora",
-                "repo_type": "model",
-            },
-        ])
-        @step
-        def finetune_model(self):
-            path_to_model = current.huggingface_hub.loaded["mistralai/Mistral-7B-Instruct-v0.1"]
-            # path_to_model will be /my-directory
+        self.model_id = "mistralai/Mistral-7B-Instruct-v0.1"
+        self.llama_model = current.huggingface_hub.snapshot_download(
+            repo_id=self.model_id,
+            allow_patterns=["*.safetensors", "*.json", "tokenizer.*"],
+        )
+        self.next(self.train)
+
+    # **Usage: explicitly loading models at runtime from the Hugging Face Hub or from cache (from Metaflow's datastore)**
+    @huggingface_hub
+    @step
+    def run_training(self):
+        # Temporary directory (auto-cleaned on exit)
+        with current.huggingface_hub.load(
+            repo_id="google-bert/bert-base-uncased",
+            allow_patterns=["*.bin"],
+        ) as local_path:
+            # Use files under local_path
+            train_model(local_path)
+            ...
+
+    # **Usage: loading models directly from the Hugging Face Hub or from cache (from Metaflow's datastore)**
+
+    @huggingface_hub(load=["mistralai/Mistral-7B-Instruct-v0.1"])
+    @step
+    def pull_model_from_huggingface(self):
+        path_to_model = current.huggingface_hub.loaded["mistralai/Mistral-7B-Instruct-v0.1"]
+
+    @huggingface_hub(load=[("mistralai/Mistral-7B-Instruct-v0.1", "/my-directory"), ("myorg/mistral-lora", "/my-lora-directory")])
+    @step
+    def finetune_model(self):
+        path_to_model = current.huggingface_hub.loaded["mistralai/Mistral-7B-Instruct-v0.1"]
+        # path_to_model will be /my-directory
+
+
+    # Takes all the arguments passed to `snapshot_download`
+    # except for `local_dir`
+    @huggingface_hub(load=[
+        {
+            "repo_id": "mistralai/Mistral-7B-Instruct-v0.1",
+        },
+        {
+            "repo_id": "myorg/mistral-lora",
+            "repo_type": "model",
+        },
+    ])
+    @step
+    def finetune_model(self):
+        path_to_model = current.huggingface_hub.loaded["mistralai/Mistral-7B-Instruct-v0.1"]
+        # path_to_model will be /my-directory
     ```
 
     Parameters
@@ -598,18 +619,15 @@ class HuggingfaceHubDecorator(CheckpointDecorator):
         key may include: `repo_id`, `repo_type`, `revision`, `ignore_patterns`,
         and `allow_patterns` (see `cache_scope` for how keys are scoped).
 
-        Examples
-        --------
-        Snapshot reference:
+        > Usage Styles
         ```python
+        # Snapshot reference:
         ref = current.huggingface_hub.snapshot_download(
             repo_id="google-bert/bert-base-uncased",
             allow_patterns=["*.json"]
         )
-        ```
 
-        Explicit Model Loading with Context manager:
-        ```python
+        # Explicit Model Loading with Context manager:
         with current.huggingface_hub.load(
             repo_id="google-bert/bert-base-uncased",
             allow_patterns=["*.json"]
