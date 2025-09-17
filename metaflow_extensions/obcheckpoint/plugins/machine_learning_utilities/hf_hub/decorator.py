@@ -549,34 +549,30 @@ class HuggingfaceHubDecorator(CheckpointDecorator):
 
     cache_scope : str, optional
         The scope of the cache. Can be `checkpoint` / `flow` / `global`.
+            - `checkpoint` (default): All repos are stored like objects saved by `@checkpoint`.
+                i.e., the cached path is derived from the namespace, flow, step, and Metaflow foreach iteration.
+                Any repo downloaded under this scope will only be retrieved from the cache when the step runs under the same namespace in the same flow (at the same foreach index).
 
-        - `checkpoint` (default): All repos are stored like objects saved by `@checkpoint`.
-            i.e., the cached path is derived from the namespace, flow, step, and Metaflow foreach iteration.
-            Any repo downloaded under this scope will only be retrieved from the cache when the step runs under the same namespace in the same flow (at the same foreach index).
+            - `flow`: All repos are cached under the flow, regardless of namespace.
+                i.e., the cached path is derived solely from the flow name.
+                When to use this mode: (1) Multiple users are executing the same flow and want shared access to the repos cached by the decorator. (2) Multiple versions of a flow are deployed, all needing access to the same repos cached by the decorator.
 
-        - `flow`: All repos are cached under the flow, regardless of namespace.
-            i.e., the cached path is derived solely from the flow name.
-            When to use this mode:
-                - Multiple users are executing the same flow and want shared access to the repos cached by the decorator.
-                - Multiple versions of a flow are deployed, all needing access to the same repos cached by the decorator.
-
-        - `global`: All repos are cached under a globally static path.
-            i.e., the base path of the cache is static and all repos are stored under it.
-            When to use this mode:
-                - All repos from the Hugging Face Hub need to be shared by users across all flow executions.
-
-        Each caching scope comes with its own trade-offs:
-        - `checkpoint`:
-            - Has explicit control over when caches are populated (controlled by the same flow that has the `@huggingface_hub` decorator) but ends up hitting the Hugging Face Hub more often if there are many users/namespaces/steps.
-            - Since objects are written on a `namespace/flow/step` basis, the blast radius of a bad checkpoint is limited to a particular flow in a namespace.
-        - `flow`:
-            - Has less control over when caches are populated (can be written by any execution instance of a flow from any namespace) but results in more cache hits.
-            - The blast radius of a bad checkpoint is limited to all runs of a particular flow.
-            - It doesn't promote cache reuse across flows.
-        - `global`:
-            - Has no control over when caches are populated (can be written by any flow execution) but has the highest cache hit rate.
-            - It promotes cache reuse across flows.
-            - The blast radius of a bad checkpoint spans every flow that could be using a particular repo.
+            - `global`: All repos are cached under a globally static path.
+                i.e., the base path of the cache is static and all repos are stored under it.
+                When to use this mode:
+                    - All repos from the Hugging Face Hub need to be shared by users across all flow executions.
+            - Each caching scope comes with its own trade-offs:
+                - `checkpoint`:
+                    - Has explicit control over when caches are populated (controlled by the same flow that has the `@huggingface_hub` decorator) but ends up hitting the Hugging Face Hub more often if there are many users/namespaces/steps.
+                    - Since objects are written on a `namespace/flow/step` basis, the blast radius of a bad checkpoint is limited to a particular flow in a namespace.
+                - `flow`:
+                    - Has less control over when caches are populated (can be written by any execution instance of a flow from any namespace) but results in more cache hits.
+                    - The blast radius of a bad checkpoint is limited to all runs of a particular flow.
+                    - It doesn't promote cache reuse across flows.
+                - `global`:
+                    - Has no control over when caches are populated (can be written by any flow execution) but has the highest cache hit rate.
+                    - It promotes cache reuse across flows.
+                    - The blast radius of a bad checkpoint spans every flow that could be using a particular repo.
 
     load: Union[List[str], List[Tuple[Dict, str]], List[Tuple[str, str]], List[Dict], None]
         The list of repos (models/datasets) to load.
