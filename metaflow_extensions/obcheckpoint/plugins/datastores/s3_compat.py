@@ -34,6 +34,19 @@ except:
     from urllib.parse import urlparse
 
 
+_GLOBAL_S3_CLIENT = None
+
+
+def get_s3_client():
+    global _GLOBAL_S3_CLIENT
+    if _GLOBAL_S3_CLIENT is None:
+        from metaflow import S3
+
+        _GLOBAL_S3_CLIENT = S3
+        return S3
+    return _GLOBAL_S3_CLIENT
+
+
 class S3CompatibleStorage(S3Storage):
 
     TYPE = "s3-compatible"
@@ -52,7 +65,7 @@ class S3CompatibleStorage(S3Storage):
         return DATASTORE_SYSROOT_S3
 
     def save_files(self, key_path_tuples, overwrite=False):
-        with S3(
+        with get_s3_client()(
             s3root=self.datastore_root,
             role=self._s3_role_arn,
             session_vars=self._s3_session_vars,
@@ -70,7 +83,7 @@ class S3CompatibleStorage(S3Storage):
             )
 
     def save_file(self, key, path, overwrite=False):
-        with S3(
+        with get_s3_client()(
             s3root=self.datastore_root,
             role=self._s3_role_arn,
             session_vars=self._s3_session_vars,
@@ -90,7 +103,7 @@ class S3CompatibleStorage(S3Storage):
         if len(keys) == 0:
             return CloseAfterUse(iter([]))
 
-        s3 = S3(
+        s3 = get_s3_client()(
             s3root=self.datastore_root,
             role=self._s3_role_arn,
             session_vars=self._s3_session_vars,
@@ -118,7 +131,7 @@ class S3CompatibleStorage(S3Storage):
         return CloseAfterUse(iter_results(), closer=s3)
 
     def is_file(self, paths):
-        with S3(
+        with get_s3_client()(
             s3root=self.datastore_root,
             tmproot=ARTIFACT_LOCALROOT,
             role=self._s3_role_arn,
@@ -135,7 +148,7 @@ class S3CompatibleStorage(S3Storage):
                 return result
 
     def info_file(self, path):
-        with S3(
+        with get_s3_client()(
             s3root=self.datastore_root,
             tmproot=ARTIFACT_LOCALROOT,
             role=self._s3_role_arn,
@@ -146,7 +159,7 @@ class S3CompatibleStorage(S3Storage):
             return s3obj.exists, s3obj.metadata
 
     def size_file(self, path):
-        with S3(
+        with get_s3_client()(
             s3root=self.datastore_root,
             tmproot=ARTIFACT_LOCALROOT,
             role=self._s3_role_arn,
@@ -158,7 +171,7 @@ class S3CompatibleStorage(S3Storage):
 
     def list_content(self, paths):
         strip_prefix_len = len(self.datastore_root.rstrip("/")) + 1
-        with S3(
+        with get_s3_client()(
             s3root=self.datastore_root,
             tmproot=ARTIFACT_LOCALROOT,
             role=self._s3_role_arn,
@@ -183,7 +196,7 @@ class S3CompatibleStorage(S3Storage):
                 else:
                     yield path, obj, None, None, None
 
-        with S3(
+        with get_s3_client()(
             s3root=self.datastore_root,
             tmproot=ARTIFACT_LOCALROOT,
             role=self._s3_role_arn,
@@ -219,7 +232,7 @@ class S3CompatibleStorage(S3Storage):
         if len(paths) == 0:
             return CloseAfterUse(iter([]))
 
-        s3 = S3(
+        s3 = get_s3_client()(
             s3root=self.datastore_root,
             tmproot=ARTIFACT_LOCALROOT,
             role=self._s3_role_arn,
