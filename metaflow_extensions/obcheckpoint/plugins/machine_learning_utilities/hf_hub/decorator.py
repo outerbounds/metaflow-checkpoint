@@ -11,6 +11,9 @@ import sys
 import os
 import tempfile
 from metaflow.metadata_provider import MetaDatum
+from ..card_utils import CardDecoratorInjector
+from .cards.hf_hub_card import HuggingfaceHubListRefresher, HuggingfaceHubCollector
+from functools import partial
 
 HUGGINGFACE_HUB_ROOT_PREFIX = "mf.huggingface_hub"
 
@@ -84,12 +87,16 @@ class HuggingfaceRegistry:
     ```
     """
 
+    _KEYS_USED_TO_DERIVE_CACHE_NAME = []
+
     _checkpointer: CurrentCheckpointer = None
     _loaded_models: "HuggingfaceLoadedModels"
     _cache_scope: str = "checkpoint"
+    _runtime_tracked_models: list = []
 
     def __init__(self, logger) -> None:
         self._logger = logger
+        self._runtime_tracked_models = []
 
     def _override_based_on_cache_scope(
         self, checkpointer: CurrentCheckpointer, cache_scope
@@ -170,11 +177,36 @@ class HuggingfaceRegistry:
             prefix="[@huggingface_hub]",
         )
 
-    def _load_or_cache_model(self, **kwargs) -> dict:
+    def _track_runtime_model(
+        self, chckpt_ref, calling_mechanism, hf_kwargs, cache_hit=False
+    ):
+        """Track models loaded at runtime for card display"""
+        metadata = chckpt_ref.get("metadata", {})
+        self._runtime_tracked_models.append(
+            {
+                "repo_id": metadata.get("repo_id", "unknown"),
+                "key": chckpt_ref.get("key"),
+                "metadata": metadata,
+                "size": chckpt_ref.get("size", 0),
+                "created_on": chckpt_ref.get("created_on", ""),
+                "storage_path": chckpt_ref.get("storage_path", "N/A"),
+                "url": chckpt_ref.get("url", "N/A"),
+                "pathspec": chckpt_ref.get("pathspec", "N/A"),
+                "calling_mechanism": calling_mechanism,
+                "hf_kwargs": hf_kwargs,
+                "cache_hit": cache_hit,
+                "force_download": hf_kwargs.get("force_download", False),
+            }
+        )
+
+    def _load_or_cache_model(self, **kwargs) -> tuple:
         """
         This function will:
             1. return  a reference to the model it the datastore if found.
             2. otherwise it will download the model, save to datastore and return refernce to that checkpoint in the datastore.
+
+        Returns:
+            tuple: (chckpt_ref, cache_hit)
         """
         from metaflow import current
 
@@ -184,7 +216,7 @@ class HuggingfaceRegistry:
         chckpt_name = self._scoped_name(repo_name, repo_type, kwargs)
         chckpts = list(self._checkpointer.list(name=chckpt_name, full_namespace=True))
         if len(chckpts) > 0 and not force_download:
-            return chckpts[0]
+            return chckpts[0], True  # Cache hit
 
         _kwargs = kwargs.copy()
         _kwargs["local_dir"] = self._checkpointer.directory
@@ -219,7 +251,7 @@ class HuggingfaceRegistry:
         )
         # wipe the directory so that it's unpolluted for another function call.
         shutil.rmtree(self._checkpointer.directory)
-        return chckpt_ref
+        return chckpt_ref, False  # Cache miss
 
     def snapshot_download(self, **kwargs) -> dict:
         """
@@ -231,9 +263,17 @@ class HuggingfaceRegistry:
         dict
             A reference to the artifact saved to or retrieved from the Metaflow datastore.
         """
+        _kwags_copy = kwargs.copy()
         if "repo_id" not in kwargs:
             raise ValueError("repo_id is required for snapshot_download")
-        return self._load_or_cache_model(**kwargs)
+        result, cache_hit = self._load_or_cache_model(**kwargs)
+
+        _kwags_copy["repo_type"] = _kwags_copy.get("repo_type", "model")
+        # Track this runtime call for the card
+        self._track_runtime_model(
+            result, "snapshot_download", _kwags_copy, cache_hit=cache_hit
+        )
+        return result
 
     def load(self, repo_id=None, path=None, repo_type="model", **kwargs):
         """
@@ -272,6 +312,7 @@ class HuggingfaceRegistry:
         @contextmanager
         def _cm(resolved_repo_id, resolved_path, repo_type, kwargs_copy):
             created_tempdir = None
+            chckpt_ref_for_tracking = None
             try:
                 if resolved_path is None:
                     # Build a deterministic prefix using the scoped cache name
@@ -287,12 +328,32 @@ class HuggingfaceRegistry:
                     os.makedirs(resolved_path, exist_ok=True)
                     target_path = resolved_path
 
-                model_path = self._loaded_models._load_model(
+                (
+                    model_path,
+                    chckpt_ref_for_tracking,
+                    cache_hit,
+                ) = self._loaded_models._load_model_with_ref(
                     resolved_repo_id,
                     path=target_path,
                     repo_type=repo_type,
+                    runtime_loading=True,
                     **kwargs_copy
                 )
+
+                # Track this runtime call for the card
+                if chckpt_ref_for_tracking:
+                    all_kwargs = {
+                        "repo_type": repo_type,
+                        "repo_id": resolved_repo_id,
+                        **kwargs_copy,
+                    }
+                    self._track_runtime_model(
+                        chckpt_ref_for_tracking,
+                        "context manager",
+                        all_kwargs,
+                        cache_hit=cache_hit,
+                    )
+
                 yield model_path
             finally:
                 if created_tempdir is not None:
@@ -416,7 +477,7 @@ class HuggingfaceLoadedModels:
 
     def _load_model(self, repo_id, path=None, repo_type="model", **kwargs):
         """
-        Load a model from either the datastore or Hugging Face Hub.
+        Load a model from either the datastore or Hugging Face Hub. Called before runtime.
 
         Args:
             repo_id (str): The Hugging Face model repo ID
@@ -424,6 +485,29 @@ class HuggingfaceLoadedModels:
             repo_type (str, optional): Type of repo (model/dataset)
             **kwargs: Additional arguments passed to snapshot_download
         """
+        model_path, _, _ = self._load_model_with_ref(
+            repo_id, path, repo_type, runtime_loading=False, **kwargs
+        )
+        return model_path
+
+    def _load_model_with_ref(
+        self, repo_id, path=None, repo_type="model", runtime_loading=False, **kwargs
+    ):
+        """
+        Load a model from either the datastore or Hugging Face Hub, returning both path and reference.
+
+        Args:
+            repo_id (str): The Hugging Face model repo ID
+            path (str, optional): Specific path to load the model into
+            repo_type (str, optional): Type of repo (model/dataset)
+            runtime_loading: (bool, optional)
+                should model be a part of the `current.huggingface_hub.loaded.info`. If set to True, then it wont be part of `current.huggingface_hub.loaded.info`
+            **kwargs: Additional arguments passed to snapshot_download
+
+        Returns:
+            tuple: (model_path, chckpt_ref, cache_hit)
+        """
+        _kwargs_copy = kwargs.copy()
         chckpt_name = self._checkpointer._scoped_name(repo_id, repo_type, kwargs)
         chckpts = list(
             self._checkpointer._checkpointer.list(name=chckpt_name, full_namespace=True)
@@ -431,6 +515,8 @@ class HuggingfaceLoadedModels:
 
         # Setup model path and load if needed
         model_path = self._get_or_create_model_path(repo_id, chckpt_name, path=path)
+        cache_hit = False
+
         # Get or download model reference
         if len(chckpts) == 0 or kwargs.get("force_download", False):
             self._warn(
@@ -439,14 +525,27 @@ class HuggingfaceLoadedModels:
             chckpt_ref = self._download_and_cache_model(
                 repo_id, repo_type, model_path, **kwargs
             )
+            cache_hit = False
         else:  # This means that more than 1 checkpoint exists
             chckpt_ref = chckpts[0]
             self._load_from_datastore(chckpt_ref, model_path)
+            cache_hit = True
 
-        # Update tracking
-        self._loaded_models[repo_id] = model_path
-        self._loaded_model_info[repo_id] = chckpt_ref
-        return model_path
+        if not runtime_loading:
+            # Only if the model is being loaded via the `load` parameter in `@huggingface_hub`
+            # will we set the model as a part of the model related dictionary.
+            self._loaded_models[repo_id] = model_path
+            self._loaded_model_info[repo_id] = chckpt_ref
+
+            # All this extra metadata for the Card
+            # hf_kwags = _kwargs_copy
+            _kwargs_copy["repo_id"] = repo_id
+            _kwargs_copy["repo_type"] = repo_type
+            chckpt_ref["hf_kwargs"] = _kwargs_copy
+            chckpt_ref["cache_hit"] = cache_hit
+            chckpt_ref["force_download"] = kwargs.get("force_download", False)
+
+        return model_path, chckpt_ref, cache_hit
 
     def __getitem__(self, key):
         if key not in self._loaded_models:
@@ -661,6 +760,16 @@ class HuggingfaceHubDecorator(CheckpointDecorator):
 
         self._registry = HuggingfaceRegistry(logger)
 
+        # Setup card decorator injection
+        self.deco_injector = CardDecoratorInjector()
+        self.deco_injector.attach_card_decorator(
+            flow,
+            step_name,
+            HuggingfaceHubListRefresher.CARD_ID,
+            "blank",
+            refresh_interval=2,
+        )
+
     def _resolve_settings(self):
         return {
             "load_policy": "none",
@@ -786,14 +895,34 @@ class HuggingfaceHubDecorator(CheckpointDecorator):
     def task_decorate(
         self, step_func, flow, graph, retry_count, max_user_code_retries, ubf_context
     ):
-        return step_func
+        # Create collector thread for card updates
+        self._collector_thread = HuggingfaceHubCollector(
+            HuggingfaceHubListRefresher(
+                self.loaded_models_data,
+                self._cache_scope,
+            ),
+            interval=3,
+        )
+
+        def _wrapped_step_func(_collector_thread, *args, **kwargs):
+            _collector_thread.start()
+            try:
+                return step_func(*args, **kwargs)
+            finally:
+                _collector_thread.stop()
+
+        return partial(_wrapped_step_func, self._collector_thread)
 
     def task_post_step(
         self, step_name, flow, graph, retry_count, max_user_code_retries
     ):
+        if self._collector_thread is not None:
+            self._collector_thread.stop()
         self._chkptr.cleanup()
 
     def task_exception(
         self, exception, step_name, flow, graph, retry_count, max_user_code_retries
     ):
+        if self._collector_thread is not None:
+            self._collector_thread.stop()
         self._chkptr.cleanup()
