@@ -260,6 +260,81 @@ class S3CompatibleStorage(S3Storage):
 
         return CloseAfterUse(iter_results(), closer=s3)
 
+    # Delete operations
+    def delete(self, key):
+        """Delete a single object from S3."""
+
+        # Use the S3 wrapper to list objects recursively
+        # This handles all the complexity of listing, pagination, etc.
+        _s3_class = get_s3_client()(
+            s3root=self.datastore_root,
+            tmproot=ARTIFACT_LOCALROOT,
+            role=self._s3_role_arn,
+            session_vars=self._s3_session_vars,
+            client_params=self._s3_client_params,
+        )
+        s3_client: S3Client = _s3_class._s3_client
+
+        # Parse the S3 URL to get bucket and key
+        from urllib.parse import urlparse
+
+        # The key is already in the format expected by the datastore
+        # We need to construct the full S3 path
+        if not key.startswith("s3://"):
+            # Construct full URL from datastore_root
+            full_url = f"{self.datastore_root.rstrip('/')}/{key.lstrip('/')}"
+        else:
+            full_url = key
+
+        parsed = urlparse(full_url, allow_fragments=False)
+        bucket = parsed.netloc
+        object_key = parsed.path.lstrip("/")
+        s3_client.client.delete_object(Bucket=bucket, Key=object_key)
+        _s3_class.close()
+        return True
+
+    def delete_prefix(self, key_prefix):
+        """Delete all objects under a prefix from S3."""
+        from urllib.parse import urlparse
+
+        # Use the S3 wrapper to list objects recursively
+        # This handles all the complexity of listing, pagination, etc.
+        with get_s3_client()(
+            s3root=self.datastore_root,
+            tmproot=ARTIFACT_LOCALROOT,
+            role=self._s3_role_arn,
+            session_vars=self._s3_session_vars,
+            client_params=self._s3_client_params,
+        ) as s3:
+            # List all objects under the prefix recursively
+            # Note: We don't add trailing slash because the artifact could be:
+            # 1. A single file (tarball): "artifact_key.tar"
+            # 2. Multiple files (directory): "artifact_key/file1.txt", "artifact_key/file2.txt"
+            s3_objects = s3.list_recursive([key_prefix])
+
+            if not s3_objects:
+                return True
+            s3_client: S3Client = s3._s3_client
+            # Extract bucket and keys from S3Object URLs
+            objects_to_delete = []
+            bucket = None
+            for s3_obj in s3_objects:
+                if s3_obj.exists:
+                    parsed = urlparse(s3_obj.url, allow_fragments=False)
+                    if bucket is None:
+                        bucket = parsed.netloc
+                    object_key = parsed.path.lstrip("/")
+                    objects_to_delete.append({"Key": object_key})
+
+            # Delete objects in batches of 1000 (AWS limit)
+            if objects_to_delete and bucket:
+                for i in range(0, len(objects_to_delete), 1000):
+                    batch = objects_to_delete[i : i + 1000]
+                    s3_client.client.delete_objects(
+                        Bucket=bucket, Delete={"Objects": batch}
+                    )
+            return True
+
 
 def _load_bytes_single_cw(
     role_arn, session_vars, client_params, dir_path, s3_path, _key

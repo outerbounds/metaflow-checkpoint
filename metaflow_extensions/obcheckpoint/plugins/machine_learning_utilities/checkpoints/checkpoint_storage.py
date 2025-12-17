@@ -11,6 +11,7 @@ from ..datastore.core import (
     DatastoreInterface,
     ObjectStorage,
     STORAGE_FORMATS,
+    warning_message,
 )
 from ..datastore.exceptions import (
     DatastoreReadInitException,
@@ -585,6 +586,133 @@ class CheckpointDatastore(DatastoreInterface):
             name=name,
             attempt=attempt,
         )
+
+    def delete(
+        self,
+        checkpoint_artifact: "CheckpointArtifact",
+    ) -> bool:
+        """
+        Delete a checkpoint from all stores.
+
+        Deletion order:
+        1. Delete artifact data (files/tarball)
+        2. Delete artifact metadata
+        3. Delete task metadata
+
+        NOTE: This does NOT modify the 'latest' pointer in any store.
+
+        Parameters
+        ----------
+        checkpoint_artifact : CheckpointArtifact
+            The checkpoint artifact to delete.
+
+        Returns
+        -------
+        bool
+            True if all deletions were successful.
+
+        Raises
+        ------
+        DatastoreNotReadyException
+            If the datastore is not properly initialized for delete operations.
+        """
+        if not all(
+            [
+                self.artifact_ready,
+                self.artifact_metadatastore is not None,
+                self.metadata_ready,
+            ]
+        ):
+            raise DatastoreNotReadyException(
+                "Checkpoint datastore is not ready for delete operations. "
+                "All stores (artifact_store, artifact_metadatastore, metadata_store) must be initialized."
+            )
+
+        success = True
+        attempt = checkpoint_artifact.attempt
+        version_id = checkpoint_artifact.version_id
+        name = checkpoint_artifact.name
+
+        # Step 1: Delete actual artifact data (FIRST)
+        artifact_key = self.create_key_name(
+            self._NAME_ENTROPY,
+            attempt,
+            name,
+            version_id,
+        )
+        # If there are exceptions then let them Bubble!
+        self.artifact_store.delete_prefix(artifact_key)
+
+        # Step 2: Delete from artifact_metadatastore
+        art_metadata_key = self.create_key_name(
+            self._NAME_ENTROPY,
+            attempt,
+            name,
+            version_id,
+            "metadata",
+        )
+        self.artifact_metadatastore.delete(art_metadata_key)
+
+        # Step 3: Delete from metadata_store
+        task_metadata_key = self.create_key_name(
+            attempt,
+            name,
+            version_id,
+            "metadata",
+        )
+        self.metadata_store.delete(task_metadata_key)
+
+        return success
+
+    @classmethod
+    def init_delete_store(
+        cls,
+        storage_backend: DataStoreStorage,
+        checkpoint_artifact: "CheckpointArtifact",
+    ):
+        """
+        Initialize datastore for delete operations from a checkpoint artifact.
+
+        This creates a datastore instance with access to all three stores
+        needed for complete checkpoint deletion.
+        """
+        datastore = cls()
+        _key_decomp = cls.decompose_key(checkpoint_artifact.key)
+
+        _path_components = [
+            _key_decomp.flow_name,
+            _key_decomp.step_name,
+            _key_decomp.scope,
+            _key_decomp.task_identifier,
+        ]
+
+        # Initialize artifact store
+        datastore.artifact_store = ObjectStorage(
+            storage_backend,
+            root_prefix=_key_decomp.root_prefix,
+            path_components=["checkpoints", ARTIFACT_STORE_NAME] + _path_components,
+        )
+
+        # Initialize artifact metadata store
+        datastore.artifact_metadatastore = ObjectStorage(
+            storage_backend,
+            root_prefix=_key_decomp.root_prefix,
+            path_components=["checkpoints", ARTIFACT_METADATA_STORE_NAME]
+            + _path_components,
+        )
+
+        # Initialize metadata store using pathspec from artifact
+        datastore.metadata_store = ObjectStorage(
+            storage_backend,
+            root_prefix=_key_decomp.root_prefix,
+            path_components=["checkpoints", METADATA_STORE_NAME]
+            + checkpoint_artifact.pathspec.split("/"),
+        )
+
+        datastore._NAME_ENTROPY = _key_decomp.pathspec_hash
+        datastore.pathspec = checkpoint_artifact.pathspec
+
+        return datastore
 
     @classmethod
     def decompose_key(cls, key) -> CheckpointsPathComponents:

@@ -119,6 +119,16 @@ class MetaflowDataArtifactReference:
     def _load_metadata_from_key(cls, key, storage_backend):
         raise NotImplementedError
 
+    # ! INHERIT AND OVERRIDE (Private from user)
+    def _delete(self, storage_backend) -> bool:
+        """Delete this artifact from storage."""
+        raise NotImplementedError
+
+    @classmethod
+    def _delete_from_key(cls, key: str, storage_backend) -> bool:
+        """Delete artifact by key."""
+        raise NotImplementedError
+
 
 class ModelArtifact(MetaflowDataArtifactReference):
 
@@ -234,6 +244,36 @@ class ModelArtifact(MetaflowDataArtifactReference):
             )
         )
 
+    def _delete(self, storage_backend) -> bool:
+        """
+        Delete this model from all stores.
+
+        Returns
+        -------
+        bool
+            True if deletion was successful.
+        """
+        from .modeling_utils.model_storage import ModelDatastore
+
+        datastore = ModelDatastore.init_delete_store(
+            storage_backend,
+            model_artifact=self,
+        )
+
+        return datastore.delete(self)
+
+    @classmethod
+    def _delete_from_key(cls, key: str, storage_backend) -> bool:
+        """
+        Delete model by key string.
+
+        This loads the metadata first to get the full artifact with all required
+        information (uuid, attempt, pathspec), then performs the delete.
+        """
+        # Load metadata to get full model artifact info
+        artifact = cls._load_metadata_from_key(key, storage_backend)
+        return artifact._delete(storage_backend)
+
 
 class CheckpointArtifact(MetaflowDataArtifactReference):
 
@@ -320,6 +360,36 @@ class CheckpointArtifact(MetaflowDataArtifactReference):
             )
         )
 
+    def _delete(self, storage_backend) -> bool:
+        """
+        Delete this checkpoint from all stores.
+
+        Returns
+        -------
+        bool
+            True if deletion was successful.
+        """
+        from .checkpoints.checkpoint_storage import CheckpointDatastore
+
+        datastore = CheckpointDatastore.init_delete_store(
+            storage_backend,
+            checkpoint_artifact=self,
+        )
+
+        return datastore.delete(self)
+
+    @classmethod
+    def _delete_from_key(cls, key: str, storage_backend) -> bool:
+        """
+        Delete checkpoint by key string.
+
+        This loads the metadata first to get the full artifact with all required
+        information (attempt, version_id, name, pathspec), then performs the delete.
+        """
+        # Load metadata to get full checkpoint info
+        artifact = cls._load_metadata_from_key(key, storage_backend)
+        return artifact._delete(storage_backend)
+
 
 class Factory:
 
@@ -390,6 +460,61 @@ class Factory:
                 ),
             )
         return obj_type._load_metadata_from_key(key_object, storage_backend)
+
+    @classmethod
+    def delete(cls, data, storage_backend) -> bool:
+        """
+        Delete an artifact (checkpoint or model) from storage.
+
+        Parameters
+        ----------
+        data : Union[dict, MetaflowDataArtifactReference]
+            The artifact reference to delete.
+        storage_backend : DataStoreStorage
+            The storage backend to use.
+
+        Returns
+        -------
+        bool
+            True if deletion was successful.
+        """
+        art = cls.hydrate(data)
+        return art._delete(storage_backend)
+
+    @classmethod
+    def delete_from_key(cls, key: str, storage_backend) -> bool:
+        """
+        Delete an artifact by its key string.
+
+        The key pattern is used to determine whether this is a
+        checkpoint or model, then the appropriate delete method is called.
+
+        Parameters
+        ----------
+        key : str
+            The artifact key string.
+        storage_backend : DataStoreStorage
+            The storage backend to use.
+
+        Returns
+        -------
+        bool
+            True if deletion was successful.
+
+        Raises
+        ------
+        KeyNotCompatibleException
+            If the key doesn't match any supported artifact type.
+        """
+        obj_type = cls.object_type_from_key(key)
+        if obj_type is None:
+            raise KeyNotCompatibleException(
+                key,
+                supported_types=", ".join(
+                    [ModelArtifact.TYPE, CheckpointArtifact.TYPE]
+                ),
+            )
+        return obj_type._delete_from_key(key, storage_backend)
 
 
 def load_model(
@@ -494,6 +619,93 @@ def load_model(
         )
     elif type(reference) == str:
         Factory.load_from_key(reference, path, storage_backend)
+
+
+def delete_artifact(
+    reference: Union[str, MetaflowDataArtifactReference, dict],
+) -> bool:
+    """
+    Delete a model or checkpoint from Metaflow's datastore.
+
+    This function deletes artifacts that were previously saved using
+    `@model`, `@checkpoint`, or `@huggingface_hub` decorators.
+
+    The deletion removes:
+    1. The actual artifact data (files or tarball)
+    2. The artifact metadata
+    3. The task metadata (when accessible)
+
+    NOTE: This does NOT modify any 'latest' pointers. If you delete the
+    checkpoint that 'latest' points to, the pointer will become stale.
+
+    Parameters
+    ----------
+    reference : Union[str, MetaflowDataArtifactReference, dict]
+        The reference to the artifact to delete. This can be:
+        - A string key (e.g., "mf.checkpoints/checkpoints/artifacts/...")
+        - A MetaflowDataArtifactReference object (CheckpointArtifact or ModelArtifact)
+        - A dictionary artifact reference (e.g., from self.my_checkpoint)
+
+    Returns
+    -------
+    bool
+        True if deletion was successful, False if any component failed to delete.
+
+    Raises
+    ------
+    ValueError
+        If reference is None.
+    KeyNotCompatibleException
+        If the reference key doesn't match any supported artifact type.
+
+    Examples
+    --------
+    **Delete using a dictionary reference:**
+
+    ```python
+    from metaflow import FlowSpec, step, delete_artifact
+
+    class MyFlow(FlowSpec):
+        @step
+        def cleanup(self):
+            # Delete a checkpoint saved in a previous step
+            delete_artifact(self.old_checkpoint)
+            self.next(self.end)
+    ```
+
+    **Delete using a key string:**
+
+    ```python
+    from metaflow import delete_artifact
+
+    # Delete by key
+    delete_artifact("mf.checkpoints/checkpoints/artifacts/MyFlow/train/abc123/...")
+    ```
+
+    **Delete from a notebook/script:**
+
+    ```python
+    from metaflow import Run, delete_artifact
+
+    run = Run("MyFlow/123")
+    checkpoint_ref = run["train"].task.data.my_checkpoint
+    delete_artifact(checkpoint_ref)
+    ```
+    """
+    if reference is None:
+        raise ValueError("`delete_artifact` requires a reference")
+
+    storage_backend = init_datastorage_object()
+
+    if type(reference) == dict or isinstance(reference, MetaflowDataArtifactReference):
+        return Factory.delete(Factory.hydrate(reference), storage_backend)
+    elif type(reference) == str:
+        return Factory.delete_from_key(reference, storage_backend)
+    else:
+        raise ValueError(
+            f"Invalid reference type: {type(reference)}. "
+            "Expected str, dict, or MetaflowDataArtifactReference."
+        )
 
 
 # We need this here because it will help ensure that stubs for the right packages get picked up

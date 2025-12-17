@@ -1,7 +1,10 @@
 __mf_extensions__ = "obcheckpoint"
 
 from ..plugins.machine_learning_utilities.checkpoints.final_api import Checkpoint
-from ..plugins.machine_learning_utilities.datastructures import load_model
+from ..plugins.machine_learning_utilities.datastructures import (
+    load_model,
+    delete_artifact,
+)
 from ..plugins.machine_learning_utilities.datastore.context import artifact_store_from
 
 try:

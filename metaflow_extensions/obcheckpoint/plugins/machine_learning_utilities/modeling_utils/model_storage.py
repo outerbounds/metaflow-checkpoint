@@ -1,7 +1,12 @@
 import os
 from typing import Optional
 from metaflow.datastore.datastore_storage import DataStoreStorage
-from ..datastore.core import ObjectStorage, DatastoreInterface, STORAGE_FORMATS
+from ..datastore.core import (
+    ObjectStorage,
+    DatastoreInterface,
+    STORAGE_FORMATS,
+    warning_message,
+)
 from .exceptions import ModelException
 from ..exceptions import KeyNotFoundError
 from ..datastructures import ModelArtifact
@@ -162,6 +167,107 @@ class ModelDatastore(DatastoreInterface):
         # It will list only based on task since all models
         # are stored under one prefix.
         raise NotImplementedError
+
+    def delete(
+        self,
+        model_artifact: "ModelArtifact",
+    ) -> bool:
+        """
+        Delete a model from all stores.
+
+        Deletion order:
+        1. Delete artifact data (files/tarball)
+        2. Delete artifact metadata
+        3. Delete task metadata
+
+        Parameters
+        ----------
+        model_artifact : ModelArtifact
+            The model artifact to delete.
+
+        Returns
+        -------
+        bool
+            True if all deletions were successful.
+
+        Raises
+        ------
+        ValueError
+            If required datastores are not initialized.
+        """
+        if not all(
+            [
+                self.artifact_store is not None,
+                self.artifact_metadatastore is not None,
+                self.metadata_store is not None,
+            ]
+        ):
+            raise ValueError(
+                "Model datastore is not initialized for delete operations. "
+                "All stores (artifact_store, artifact_metadatastore, metadata_store) must be initialized."
+            )
+
+        success = True
+        model_uuid = model_artifact.uuid
+        attempt = model_artifact.attempt
+
+        # Step 1: Delete actual artifact data (FIRST)
+        self.artifact_store.delete_prefix(model_uuid)
+
+        # Step 2: Delete from artifact_metadatastore
+        metadata_key = self.artifact_metadatastore.create_key_name(
+            model_uuid, "metadata"
+        )
+        self.artifact_metadatastore.delete(metadata_key)
+
+        # Step 3: Delete from metadata_store
+        task_metadata_key = self.metadata_store.create_key_name(
+            attempt, model_uuid, "metadata"
+        )
+        self.metadata_store.delete(task_metadata_key)
+
+        return success
+
+    @classmethod
+    def init_delete_store(
+        cls,
+        storage_backend: DataStoreStorage,
+        model_artifact: "ModelArtifact",
+    ):
+        """
+        Initialize datastore for delete operations from a model artifact.
+
+        This creates a datastore instance with access to all three stores
+        needed for complete model deletion.
+        """
+        datastore = cls()
+        model_path_decomp = decompose_model_artifact_key(model_artifact.key)
+
+        # Initialize artifact store
+        datastore.artifact_store = ObjectStorage(
+            storage_backend,
+            root_prefix=model_path_decomp.root_prefix,
+            path_components=["models", ARTIFACT_STORE_NAME],
+        )
+
+        # Initialize artifact metadata store
+        datastore.artifact_metadatastore = ObjectStorage(
+            storage_backend,
+            root_prefix=model_path_decomp.root_prefix,
+            path_components=["models", ARTIFACT_METADATA_STORE_NAME],
+        )
+
+        # Initialize metadata store using pathspec from artifact
+        datastore.metadata_store = ObjectStorage(
+            storage_backend,
+            root_prefix=model_path_decomp.root_prefix,
+            path_components=["models", METADATA_STORE_NAME]
+            + model_artifact.pathspec.split("/"),
+        )
+
+        datastore._READ_UUID = model_path_decomp.model_uuid
+
+        return datastore
 
     @classmethod
     def init_read_store(
