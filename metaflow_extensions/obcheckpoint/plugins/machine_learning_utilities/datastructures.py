@@ -621,7 +621,7 @@ def load_model(
         Factory.load_from_key(reference, path, storage_backend)
 
 
-def delete_artifact(
+def delete_model(
     reference: Union[str, MetaflowDataArtifactReference, dict],
 ) -> bool:
     """
@@ -663,37 +663,37 @@ def delete_artifact(
     **Delete using a dictionary reference:**
 
     ```python
-    from metaflow import FlowSpec, step, delete_artifact
+    from metaflow import FlowSpec, step, delete_model
 
     class MyFlow(FlowSpec):
         @step
         def cleanup(self):
             # Delete a checkpoint saved in a previous step
-            delete_artifact(self.old_checkpoint)
+            delete_model(self.old_checkpoint)
             self.next(self.end)
     ```
 
     **Delete using a key string:**
 
     ```python
-    from metaflow import delete_artifact
+    from metaflow import delete_model
 
     # Delete by key
-    delete_artifact("mf.checkpoints/checkpoints/artifacts/MyFlow/train/abc123/...")
+    delete_model("mf.checkpoints/checkpoints/artifacts/MyFlow/train/abc123/...")
     ```
 
     **Delete from a notebook/script:**
 
     ```python
-    from metaflow import Run, delete_artifact
+    from metaflow import Run, delete_model
 
     run = Run("MyFlow/123")
     checkpoint_ref = run["train"].task.data.my_checkpoint
-    delete_artifact(checkpoint_ref)
+    delete_model(checkpoint_ref)
     ```
     """
     if reference is None:
-        raise ValueError("`delete_artifact` requires a reference")
+        raise ValueError("`delete_model` requires a reference")
 
     storage_backend = init_datastorage_object()
 
