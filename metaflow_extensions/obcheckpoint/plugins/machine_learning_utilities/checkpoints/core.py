@@ -131,6 +131,15 @@ class Checkpointer:
         return _art
 
     @classmethod
+    def _for_global_access(cls):
+        # instantiate the checkpointer so that
+        # it can be used to query the metadata store
+        # at a global level and get all possible checkpoints
+        # written by all tasks.
+        _checkpoint_datastore = ReadResolver.for_global_access()
+        return cls(datastore=_checkpoint_datastore, attempt=0)
+
+    @classmethod
     def _from_task_object(
         cls,
         task: "metaflow.Task",
@@ -295,6 +304,17 @@ class ReadResolver:
     """
 
     @classmethod
+    def for_global_access(cls):
+        # This resolver is to avoid and abstract out things needed for the
+        # listing content globally needed for book-keeping.
+        storage_backend = init_datastorage_object()
+        # choose an arbitrary flow for the backend since it will be used for
+        # searching global storage of different runs.
+        return CheckpointDatastore.init_read_store(
+            storage_backend, pathspec="place/holder/path/spec"
+        )
+
+    @classmethod
     def from_pathspec(cls, pathspec):
         # This resolver helps create the datastore when the user is calling `Checkpoint.list`
         # from a notebook or a script
@@ -317,7 +337,7 @@ class ReadResolver:
                         "The current datastore context set via `artifact_store_from` context manager"
                         "doesn't match the artifact store set in the task metadata of task (%s). "
                         "This means that some objects might not be accessible under the context manager."
-                        "If the Flow was not using `@with_artifact_store` context manager, "
+                        "If the Flow was not using `@with_artifact_store` decorator, "
                         "then remove the `artifact_store_from` context manager in your user code."
                     )
                     % pathspec

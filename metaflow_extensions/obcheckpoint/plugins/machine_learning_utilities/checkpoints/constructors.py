@@ -56,6 +56,11 @@ def _instantiate_checkpointer_for_list(task: "metaflow.Task"):
     return _checkpointer
 
 
+def _instantiate_checkpointer_for_global_reads():
+    _checkpointer = Checkpointer._for_global_access()
+    return _checkpointer
+
+
 # Technically this method should ensure that the Checkpointer also takes the
 # attempts as a part of the `load` method.
 # READ METHOD

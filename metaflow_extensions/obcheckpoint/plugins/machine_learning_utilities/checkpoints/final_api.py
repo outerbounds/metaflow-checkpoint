@@ -1,6 +1,7 @@
 from typing import Iterable, Union, List, Dict, Any, Tuple, Optional, TYPE_CHECKING
 import tempfile
 from ..datastructures import CheckpointArtifact
+from .checkpoint_storage import _search_checkpoints_in_metadata_store
 from .constants import (
     CHECKPOINT_UID_ENV_VAR_NAME,
     DEFAULT_NAME,
@@ -10,6 +11,7 @@ from .constants import (
 from .constructors import (
     _instantiate_checkpoint_for_writes,
     _instantiate_checkpointer_for_list,
+    _instantiate_checkpointer_for_global_reads,
     load_checkpoint,
 )
 from .exceptions import CheckpointNotAvailableException, CheckpointException
@@ -376,3 +378,127 @@ class Checkpoint:
             checkpoint=reference,
             local_path=path,
         )
+
+    def _search(
+        self,
+        pathspec: Optional[str] = None,
+        root_prefix: Optional[str] = None,
+        as_dict: bool = True,
+    ):
+        """
+        __Experimental__ : Interface may break until this comment is removed.
+
+        Search for checkpoints across tasks, steps, runs, or flows.
+
+        This method provides a global search capability for checkpoints stored in the
+        metadata store. Unlike the `list()` method which is scoped to the current task,
+        `_search()` can query checkpoints across the entire checkpoint namespace. This method
+        also directly relies on the checkpoint storage and completely bypasses the metaflow client
+        API to retrieve objects directly present in the checkpoint storage.
+
+        This method is designed for book-keeping over utility driven usage ( like needed
+        during metaflow runtime ).
+
+        The search scope is controlled by the `pathspec` parameter, which supports
+        hierarchical filtering at different levels of granularity.
+
+        Parameters
+        ----------
+        pathspec : str, optional
+            Hierarchical filter to scope the search. Supports the following patterns:
+            - `None` (default) - Search all checkpoints globally across all flows (slow)
+            - `"flow_name"` - All checkpoints for a specific flow
+            - `"flow_name/run_id"` - All checkpoints for a specific run
+            - `"flow_name/run_id/step_name"` - All checkpoints for a specific step
+            - `"flow_name/run_id/step_name/task_id"` - All checkpoints for a specific task
+
+        root_prefix : str, optional
+            Override the default checkpoint storage root prefix. This allows searching
+            in alternate storage locations (e.g., HuggingFace Hub cache).
+            If None, uses the default checkpoint storage prefix.
+            For searching huggingface models stored by @huggingface_hub set the value
+            to `mf.huggingface_hub`
+
+        as_dict : bool, default True
+            If True, yields checkpoint artifacts as dictionaries. If False, yields
+            CheckpointArtifact objects. Dictionary format is useful for serialization,
+            storage, or when you need a simple key-value representation.
+
+        Yields
+        ------
+        dict or CheckpointArtifact
+            If `as_dict=True` (default), yields dictionaries with checkpoint metadata.
+            If `as_dict=False`, yields CheckpointArtifact objects.
+
+            Each result contains metadata including:
+            - key: Storage key for the checkpoint
+            - pathspec: Metaflow pathspec (flow/run/step/task)
+            - attempt: Task attempt number
+            - version_id: Unique version identifier
+            - name: Checkpoint name
+            - created_on: Timestamp of creation
+            - type: 'checkpoint'
+
+        Raises
+        ------
+        ValueError
+            If pathspec has more than 4 components (flow/run/step/task).
+
+        Examples
+        --------
+        **Search all checkpoints globally:**
+
+        ```python
+        from metaflow_checkpoint import Checkpoint
+
+        # Find all checkpoints across all flows (as dictionaries by default)
+        # Note: Can be slow if you have many checkpoints
+        for checkpoint_dict in Checkpoint._search():
+            print(f"Found: {checkpoint_dict['key']}")
+        ```
+
+        **Search checkpoints for based on a flow:**
+
+        ```python
+        # Find all checkpoints for 'MyTrainingFlow'
+        for checkpoint in Checkpoint._search(pathspec="MyTrainingFlow"):
+            print(f"Flow checkpoint: {checkpoint['name']} (attempt {checkpoint['attempt']})")
+
+        # Find all checkpoints for a specific run
+        for checkpoint in Checkpoint._search(pathspec="MyTrainingFlow/1234"):
+            print(f"Run checkpoint: {checkpoint['key']}")
+
+        # Find all checkpoints saved in the 'train' step (as objects)
+        for checkpoint in Checkpoint._search(pathspec="MyTrainingFlow/1234/train", as_dict=False):
+            print(f"Step checkpoint: {checkpoint.version_id}")
+
+        # Find all checkpoints for a specific task (across all attempts)
+        for checkpoint in Checkpoint._search(pathspec="MyTrainingFlow/1234/train/5678"):
+            print(f"Task checkpoint (attempt {checkpoint['attempt']}): {checkpoint['key']}")
+        ```
+
+        **Search in alternate storage (e.g., HuggingFace Hub):**
+
+        ```python
+        # Search HuggingFace models for the training flow
+        for model in Checkpoint._search(pathspec="MyTrainingFlow", root_prefix="mf.huggingface_hub"):
+            print(f"HF model: {model['key']}")
+
+        # Export checkpoints to JSON for external tools
+        import json
+        checkpoints = list(Checkpoint._search(pathspec="MyTrainingFlow/1234"))
+        with open('checkpoints.json', 'w') as f:
+            json.dump(checkpoints, f, indent=2)
+        ```
+        """
+        checkpointer = _instantiate_checkpointer_for_global_reads()
+        if root_prefix is not None:
+            checkpointer.set_root_prefix(root_prefix)
+
+        for obj in _search_checkpoints_in_metadata_store(
+            checkpointer._checkpoint_datastore.metadata_store, pathspec=pathspec
+        ):
+            if as_dict:
+                yield obj.to_dict()
+            else:
+                yield obj

@@ -11,7 +11,7 @@ import os
 import json
 from pathlib import Path
 from io import BytesIO
-from collections import namedtuple
+from collections import namedtuple, deque
 from datetime import datetime
 import tempfile
 
@@ -128,6 +128,7 @@ class ObjectStorage(object):
         self._backend: DataStoreStorage = storage_backend
         self._storage_root = self._backend.datastore_root
         self._path_components = path_components
+        self._root_prefix = root_prefix
         self.set_full_prefix(root_prefix)
         self._inject_methods_to_storage_backend()
 
@@ -310,25 +311,19 @@ class ObjectStorage(object):
                     key=_relative_url_convert(list_content_result.path),
                 )
         else:
-
-            def _list_content_recursive(x_keys):
-                _keys = []
-                for list_content_result in self._backend.list_content(x_keys):
+            # Iterative DFS approach - yields files immediately as they're discovered
+            # and avoids recursion depth limits for deeply nested directories
+            pending_dirs = deque(keys)
+            while pending_dirs:
+                current_key = pending_dirs.pop()  # DFS order (depth-first)
+                for list_content_result in self._backend.list_content([current_key]):
                     if list_content_result.is_file:
-                        _keys.append(
-                            ListPathResult(
-                                full_url=_full_url_convert(list_content_result.path),
-                                key=_relative_url_convert(list_content_result.path),
-                            )
+                        yield ListPathResult(
+                            full_url=_full_url_convert(list_content_result.path),
+                            key=_relative_url_convert(list_content_result.path),
                         )
                     else:
-                        _keys.extend(
-                            _list_content_recursive([list_content_result.path])
-                        )
-                return _keys
-
-            for x in _list_content_recursive(keys):
-                yield x
+                        pending_dirs.append(list_content_result.path)
 
     def _save_objects(
         self,

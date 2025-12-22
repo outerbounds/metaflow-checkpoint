@@ -5,6 +5,7 @@ import json
 from ..checkpoints.decorator import (
     CheckpointDecorator,
     CurrentCheckpointer,
+    Checkpoint,
     warning_message,
 )
 import sys
@@ -57,6 +58,28 @@ def download_model_from_huggingface(**kwargs):
         raise e
 
 
+def init_hf_checkpoint(checkpoint: Checkpoint, cache_scope, flow_name):
+    overrides = []
+    if cache_scope == "global":
+        overrides = [
+            "mf:internal",
+            "huggingface-hub",
+            "registry:global",
+            "fully-global",
+        ]
+    elif cache_scope == "flow":
+        overrides = [
+            "mf:internal",
+            "huggingface-hub",
+            "registry:flow",
+            flow_name,
+        ]
+    if len(overrides) > 0:
+        checkpoint._checkpointer.override_path_components(path_components=overrides)
+    checkpoint._checkpointer.set_root_prefix(HUGGINGFACE_HUB_ROOT_PREFIX)
+    return checkpoint
+
+
 class HuggingfaceRegistry:
     """
     This object provides a thin, Metaflow-friendly layer over huggingface_hub's [snapshot_download](https://huggingface.co/docs/huggingface_hub/main/en/package_reference/file_download#huggingface_hub.snapshot_download):
@@ -98,40 +121,14 @@ class HuggingfaceRegistry:
         self._logger = logger
         self._runtime_tracked_models = []
 
-    def _override_based_on_cache_scope(
-        self, checkpointer: CurrentCheckpointer, cache_scope
-    ):
-        overrides = []
-        if cache_scope == "global":
-            overrides = [
-                "mf:internal",
-                "huggingface-hub",
-                "registry:global",
-                "fully-global",
-            ]
-        elif cache_scope == "flow":
-            overrides = [
-                "mf:internal",
-                "huggingface-hub",
-                "registry:flow",
-                checkpointer._flow_name,
-            ]
-        if len(overrides) > 0:
-            checkpointer._default_checkpointer._checkpointer.override_path_components(
-                path_components=overrides
-            )
-        checkpointer._default_checkpointer._checkpointer.set_root_prefix(
-            HUGGINGFACE_HUB_ROOT_PREFIX
-        )
-        return checkpointer
-
     def _set_checkpointer(
         self, checkpointer: CurrentCheckpointer, temp_dir_root=None, cache_scope=None
     ):
         self._cache_scope = cache_scope
-        self._checkpointer = self._override_based_on_cache_scope(
-            checkpointer, cache_scope
+        checkpointer._default_checkpointer = init_hf_checkpoint(
+            checkpointer._default_checkpointer, cache_scope, checkpointer._flow_name
         )
+        self._checkpointer = checkpointer
         self._loaded_models = HuggingfaceLoadedModels(
             checkpointer=self, logger=self._logger, temp_dir_root=temp_dir_root
         )
