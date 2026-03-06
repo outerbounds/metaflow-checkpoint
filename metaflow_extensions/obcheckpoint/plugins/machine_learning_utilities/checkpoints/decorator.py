@@ -117,6 +117,16 @@ class CurrentCheckpointer:
     def info(self):
         return self._loaded_checkpoint
 
+    @property
+    def directory(self):
+        return None
+
+    def cleanup(self):
+        pass
+
+    def refresh_directory(self):
+        pass
+
     def __init__(
         self,
         flow,
@@ -186,6 +196,7 @@ class CurrentCheckpointer:
 
     def save(
         self,
+        path=None,
         name: Optional[str] = DEFAULT_NAME,
         metadata: Optional[Dict] = {},
         latest: bool = True,
@@ -292,6 +303,7 @@ class CurrentCheckpointer:
     def load(
         self,
         reference: Optional[Union[str, Dict, CheckpointArtifact]] = None,
+        path=None,
     ):
         """
         Loads a checkpoint and deserializes its fields back onto the flow.
@@ -517,6 +529,7 @@ class CheckpointDecorator(StepDecorator):
 
         if self._chkptr is not None:
             _store_checkpoint_ref_as_data_artifact(flow, retry_count, self._chkptr)
+            self._chkptr.cleanup()
             self._chkptr = None
 
     def task_pre_step(
@@ -583,12 +596,14 @@ class CheckpointDecorator(StepDecorator):
                 logger=self._logger,
                 ts=False,
             )
+        temp_dir_root = settings.get("temp_dir_root")
         self._loaded_checkpoint = self._setup_checkpointer(
             flow,
             default_task_identifier,
             resolved_scope,
             load_policy,
             gang_scheduled_task=gang_scheduled_task,
+            temp_dir_root=temp_dir_root,
         )
         self._loaded_checkpoint_lineage = []
         if self._loaded_checkpoint is not None:
@@ -633,6 +648,7 @@ class CheckpointDecorator(StepDecorator):
 
         if self._chkptr is not None:
             _store_checkpoint_ref_as_data_artifact(flow, retry_count, self._chkptr)
+            self._chkptr.cleanup()
             self._chkptr = None
 
     def _resolve_scope(self):
@@ -661,6 +677,7 @@ class CheckpointDecorator(StepDecorator):
         resolved_scope,
         load_policy,
         gang_scheduled_task=False,
+        temp_dir_root=None,
     ):
         self._chkptr = CurrentCheckpointer(
             flow=flow,
@@ -670,7 +687,7 @@ class CheckpointDecorator(StepDecorator):
             gang_scheduled_task=gang_scheduled_task,
             exclude=self.attributes.get("exclude"),
             serialization_config=self.attributes.get("serialization_config"),
-            temp_dir_root=self.attributes.get("temp_dir_root"),
+            temp_dir_root=temp_dir_root,
         )
         return self._chkptr._setup_task_first_load(load_policy, flow)
 

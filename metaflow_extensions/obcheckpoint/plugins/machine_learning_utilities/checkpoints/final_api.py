@@ -134,8 +134,26 @@ class Checkpoint:
 
     _checkpointer: "Checkpointer" = None
 
-    def __init__(self):
-        pass
+    def __init__(self, temp_dir_root=None, init_dir=False):
+        self._temp_dir_root = temp_dir_root
+        self._checkpoint_dir = None
+        if init_dir:
+            self._checkpoint_dir = tempfile.TemporaryDirectory(dir=self._temp_dir_root)
+
+    @property
+    def directory(self) -> Optional[str]:
+        if self._checkpoint_dir is None:
+            return None
+        return self._checkpoint_dir.name
+
+    def __enter__(self):
+        if self._checkpoint_dir is None:
+            self._checkpoint_dir = tempfile.TemporaryDirectory(dir=self._temp_dir_root)
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self._checkpoint_dir.cleanup()
+        self._checkpoint_dir = None
 
     def _set_checkpointer(self, checkpointer: "Checkpointer"):
         self._checkpointer = checkpointer
