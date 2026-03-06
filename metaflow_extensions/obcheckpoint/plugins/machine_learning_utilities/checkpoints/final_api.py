@@ -195,7 +195,7 @@ class Checkpoint:
 
         field_manifest = {}
 
-        with tempfile.TemporaryDirectory(prefix="mf_implicit_save_") as tmp_dir:
+        with tempfile.TemporaryDirectory(prefix="mf_implicit_save_", dir=temp_dir_root) as tmp_dir:
             for field_name, value in field_items:
                 fmt = serialization_config.get(field_name, PICKLE_FORMAT)
                 data = _serialize_value(value, fmt)
@@ -371,6 +371,7 @@ class Checkpoint:
         self,
         reference: Union[str, Dict, CheckpointArtifact],
         flow,
+        temp_dir_root=None,
     ):
         """
         Loads a checkpoint and deserializes its fields back onto *flow*.
@@ -388,7 +389,7 @@ class Checkpoint:
         flow : FlowSpec
             The Metaflow step's ``self`` — destination for deserialized values.
         """
-        with tempfile.TemporaryDirectory(prefix="mf_implicit_load_") as tmp_dir:
+        with tempfile.TemporaryDirectory(prefix="mf_implicit_load_", dir=temp_dir_root) as tmp_dir:
             load_checkpoint(checkpoint=reference, local_path=tmp_dir)
 
             manifest_path = os.path.join(tmp_dir, IMPLICIT_MANIFEST_FILENAME)
