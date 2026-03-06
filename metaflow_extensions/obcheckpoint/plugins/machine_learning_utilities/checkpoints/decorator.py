@@ -110,22 +110,16 @@ class CurrentCheckpointer:
         return self._task_identifier
 
     @property
+    def directory(self):
+        return None
+
+    @property
     def is_loaded(self):
         return self._loaded_checkpoint is not None
 
     @property
     def info(self):
         return self._loaded_checkpoint
-
-    @property
-    def directory(self):
-        return None
-
-    def cleanup(self):
-        pass
-
-    def refresh_directory(self):
-        pass
 
     def __init__(
         self,
@@ -140,9 +134,17 @@ class CurrentCheckpointer:
     ) -> None:
         from metaflow import current
 
+        self._temp_dir_root = temp_dir_root
         self._resolved_scope = resolved_scope
         self._logger = logger
         self._loaded_checkpoint = None
+        # Ensure that if a tempdir root path is provided and nothing
+        # exists then we end up creating that path. This helps ensure
+        # that rouge paths with arbirary Filesystems get created before
+        # temp dirs exists.
+        if temp_dir_root is not None:
+            if not os.path.exists(temp_dir_root):
+                os.makedirs(temp_dir_root, exist_ok=True)
         self._task_identifier = task_identifier
         self._default_checkpointer = _instantiate_checkpoint_for_writes(
             Checkpoint(),
@@ -156,10 +158,6 @@ class CurrentCheckpointer:
         self._resolved_scope = resolved_scope
         self._exclude = exclude
         self._serialization_config = serialization_config or {}
-        self._temp_dir_root = temp_dir_root
-        if temp_dir_root is not None:
-            if not os.path.exists(temp_dir_root):
-                os.makedirs(temp_dir_root, exist_ok=True)
         os.environ[CHECKPOINT_TASK_IDENTIFIER_ENV_VAR_NAME] = self._task_identifier
         os.environ[CHECKPOINT_UID_ENV_VAR_NAME] = str(
             self._default_checkpointer._checkpointer._checkpoint_uid
@@ -299,6 +297,12 @@ class CurrentCheckpointer:
             as_dict=True,
             full_namespace=full_namespace,
         )
+
+    def cleanup(self):
+        pass
+
+    def refresh_directory(self):
+        pass
 
     def load(
         self,
@@ -555,6 +559,10 @@ class CheckpointDecorator(StepDecorator):
         resolved_scope = self._resolve_scope()
         gang_scheduled_task = graph[step_name].parallel_step
 
+        temp_dir_root = settings.get(
+            "temp_dir_root",
+        )
+
         if gang_scheduled_task and not getattr(
             current.parallel, "control_task_id", None
         ):
@@ -596,7 +604,6 @@ class CheckpointDecorator(StepDecorator):
                 logger=self._logger,
                 ts=False,
             )
-        temp_dir_root = settings.get("temp_dir_root")
         self._loaded_checkpoint = self._setup_checkpointer(
             flow,
             default_task_identifier,
