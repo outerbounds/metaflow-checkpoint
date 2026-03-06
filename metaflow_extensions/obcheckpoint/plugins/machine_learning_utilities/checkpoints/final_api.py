@@ -1,9 +1,11 @@
-from typing import Iterable, Union, List, Dict, Any, Tuple, Optional, TYPE_CHECKING
+import json
+import os
+import pickle
 import tempfile
+from typing import Union, List, Dict, Any, Tuple, Optional, TYPE_CHECKING
 from ..datastructures import CheckpointArtifact
 from .checkpoint_storage import _search_checkpoints_in_metadata_store
 from .constants import (
-    CHECKPOINT_UID_ENV_VAR_NAME,
     DEFAULT_NAME,
     TASK_CHECKPOINTS_ARTIFACT_NAME,
     DEFAULT_STORAGE_FORMAT,
@@ -19,6 +21,67 @@ from .exceptions import CheckpointNotAvailableException, CheckpointException
 if TYPE_CHECKING:
     import metaflow
     from .core import Checkpointer
+
+# ---------------------------------------------------------------------------
+# Implicit serialization helpers
+# ---------------------------------------------------------------------------
+
+IMPLICIT_MANIFEST_FILENAME = "__implicit_checkpoint__.json"
+
+PICKLE_FORMAT = "pickle"
+RAW_FORMAT = "raw"
+_SUPPORTED_FORMATS = (PICKLE_FORMAT, RAW_FORMAT)
+
+
+def _get_implicit_fields(flow, exclude) -> List[Tuple[str, Any]]:
+    """Return list of (field_name, value) to checkpoint.
+
+    Scans ``flow.__dict__`` and returns every non-underscore, non-callable
+    attribute that is not in *exclude*.
+    """
+    exclude_set = set(exclude or [])
+    result = []
+    for name, value in flow.__dict__.items():
+        if name.startswith("_"):
+            continue
+        if callable(value):
+            continue
+        if name in exclude_set:
+            continue
+        result.append((name, value))
+    return result
+
+
+def _serialize_value(value, fmt) -> bytes:
+    """Serialize *value* to bytes using *fmt*."""
+    if fmt == PICKLE_FORMAT:
+        return pickle.dumps(value)
+    elif fmt == RAW_FORMAT:
+        if not isinstance(value, (bytes, bytearray)):
+            raise TypeError(
+                "Field with serialization format 'raw' must be bytes or bytearray, "
+                "got %s. Use the default 'pickle' format for other types."
+                % type(value).__name__
+            )
+        return bytes(value)
+    else:
+        raise ValueError(
+            "Unsupported serialization format %r. Supported formats: %s"
+            % (fmt, _SUPPORTED_FORMATS)
+        )
+
+
+def _deserialize_value(data, fmt) -> Any:
+    """Deserialize bytes produced by ``_serialize_value`` back to a Python object."""
+    if fmt == PICKLE_FORMAT:
+        return pickle.loads(data)
+    elif fmt == RAW_FORMAT:
+        return data
+    else:
+        raise ValueError("Unsupported serialization format %r." % fmt)
+
+
+# ---------------------------------------------------------------------------
 
 
 def _extract_task_object(
@@ -71,88 +134,97 @@ class Checkpoint:
 
     _checkpointer: "Checkpointer" = None
 
-    def __init__(self, temp_dir_root=None, init_dir=False):
-        self._temp_dir_root = temp_dir_root
-        self._checkpoint_dir = None
-        if init_dir:
-            self._checkpoint_dir = tempfile.TemporaryDirectory(dir=self._temp_dir_root)
-
-    @property
-    def directory(self) -> Optional[str]:
-        """
-        The directory where a checkpoint is loaded
-        """
-        if self._checkpoint_dir is None:
-            return None
-        return self._checkpoint_dir.name
+    def __init__(self):
+        pass
 
     def _set_checkpointer(self, checkpointer: "Checkpointer"):
         self._checkpointer = checkpointer
 
     def save(
         self,
-        path=None,
-        metadata=None,
-        latest=True,
+        flow,
+        exclude=None,
+        serialization_config=None,
         name=DEFAULT_NAME,
+        metadata={},
+        latest=True,
         storage_format=DEFAULT_STORAGE_FORMAT,
+        temp_dir_root=None,
     ) -> Dict:
         """
-        Saves the checkpoint to the datastore
+        Serializes public attributes of *flow* into a checkpoint.
 
         Parameters
         ----------
-        path : Optional[Union[str, os.PathLike]], default: None
-            The path to save the checkpoint. Accepts a file path or a directory path.
-                - If a directory path is provided, all the contents within that directory will be saved.
-                When a checkpoint is reloaded during task retries, `the current.checkpoint.directory` will
-                contain the contents of this directory.
-                - If a file path is provided, the file will be directly saved to the datastore (with the same filename).
-                When the checkpoint is reloaded during task retries, the file with the same name will be available in the
-                `current.checkpoint.directory`.
-                - If no path is provided then the `Checkpoint.directory` will be saved as the checkpoint.
+        flow : FlowSpec
+            The Metaflow step's ``self`` — source of attribute values.
 
-        name : Optional[str], default: "mfchckpt"
+        exclude : list of str, optional
+            Attribute names to skip.  All other public non-underscore,
+            non-callable attributes on ``flow.__dict__`` are checkpointed.
+
+        serialization_config : dict, optional
+            ``{field_name: format}`` overrides.  Supported formats are
+            ``"pickle"`` (default) and ``"raw"`` (for ``bytes``/``bytearray``).
+
+        name : str, default: "mfchckpt"
             The name of the checkpoint.
 
-        metadata : Optional[Dict], default: {}
-            Any metadata that needs to be saved with the checkpoint.
+        metadata : dict, default: {}
+            User metadata to attach to the checkpoint.
 
         latest : bool, default: True
-            If True, the checkpoint will be marked as the latest checkpoint.
-            This helps determine if the checkpoint gets loaded when the task restarts.
+            Mark this checkpoint as the latest.
 
         storage_format : str, default: files
-            If `tar`, the contents of the directory will be tarred before saving to the datastore.
-            If `files`, saves directory directly to the datastore.
+            If ``tar``, the checkpoint directory is tarred before uploading.
+            If ``files``, files are uploaded directly.
         """
-        if path is None and self.directory is None:
-            raise ValueError(
-                "`path` cannot be None when the Checkpoint object is not instantiated with a context manager. "
-            )
-        if path is None:
-            path = self.directory
         if self._checkpointer is None:
-            # If the `Checkpoint` object is being used by `CurrentCheckpointer` then we have already set the `_checkpointer`
-            # attribute. If it is not being set by `CurrentCheckpointer` then the user might be calling it in an outside
-            # process or within main process. So we try to instantiate it for writes.
             self = self._init_checkpoint_for_writes(self)
 
-        if metadata is None:
-            metadata = {}
-        return self._checkpointer.save(
-            path=path,
-            name=name,
-            metadata=metadata,
-            latest=latest,
-            storage_format=storage_format,
-        ).to_dict()
+        serialization_config = serialization_config or {}
+        field_items = _get_implicit_fields(flow, exclude)
+
+        if not field_items:
+            raise ValueError(
+                "No fields found to checkpoint. Either specify `exclude=[...]` "
+                "to control which fields are skipped, or set public attributes on "
+                "self before calling current.checkpoint.save()."
+            )
+
+        field_manifest = {}
+
+        with tempfile.TemporaryDirectory(prefix="mf_implicit_save_") as tmp_dir:
+            for field_name, value in field_items:
+                fmt = serialization_config.get(field_name, PICKLE_FORMAT)
+                data = _serialize_value(value, fmt)
+                ext = ".bin" if fmt == RAW_FORMAT else ".pkl"
+                filename = field_name + ext
+                with open(os.path.join(tmp_dir, filename), "wb") as f:
+                    f.write(data)
+                field_manifest[field_name] = {"format": fmt, "filename": filename}
+
+            manifest_payload = {"version": 1, "fields": field_manifest}
+            with open(os.path.join(tmp_dir, IMPLICIT_MANIFEST_FILENAME), "w") as f:
+                json.dump(manifest_payload, f, indent=2)
+
+            final_metadata = dict(metadata)
+            final_metadata["_implicit_manifest"] = manifest_payload
+
+            return self._checkpointer.save(
+                path=tmp_dir,
+                name=name,
+                metadata=final_metadata,
+                latest=latest,
+                storage_format=storage_format,
+            ).to_dict()
 
     @classmethod
     def _init_checkpoint_for_writes(cls, self):
         try:
             self = _instantiate_checkpoint_for_writes(self)
-        except ValueError as e:
+        except ValueError:
             raise CheckpointException(
                 (
                     "`Checkpoint.save` can only be called within a Metaflow Task execution. If you "
@@ -168,15 +240,6 @@ class Checkpoint:
         if self._checkpointer is None:
             self = self._init_checkpoint_for_writes(self)
         return self._checkpointer.artifact_id(name, version_id)
-
-    def __enter__(self):
-        if self._checkpoint_dir is None:
-            self._checkpoint_dir = tempfile.TemporaryDirectory(dir=self._temp_dir_root)
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self._checkpoint_dir.cleanup()
-        self._checkpoint_dir = None
 
     def list(
         self,
@@ -242,28 +305,8 @@ class Checkpoint:
                 reverse=True,
             )
 
-        # There are two potential code paths here:
-        # 1. Checkpoint.list is being called outside the Task Process in a Notebook or a script to extract the
-        # checkpoints. At this point, we can check if the checkpoints are stored in the `Task` object;
-        # if that fails, we can check if checkpoints are written within the Metadata store. of the task. Both code paths
-        # are valid when Metaflow is being called from a notebook or a script. We allow the metadata store access to
-        # ensure that the checkpoints are not lost even the task completely crashed we were unable to log any data artifacts.
-        # 2. Checkpoint.list is being called within a Task Process. In this case we can directly access the datastore if the
-        # task object is not available. If the task object is available , we do the same things as specified in (1.)
-
-        # The following table outlines the outcomes of the different code paths.
-
-        # |  MF TASK CONTEXT | Task Object  | Outcome
-        # | ---------------- | ------------ | ------------
-        # | -----False------ | ----False--- | (C1) Raise Exception
-        # | -----False------ | ----True---- | (C2) Search Task's DataArtifact and if not then search the Task's Metadata store
-        # | -----True------- | ----False--- | (C3) instantiate the checkpointer and search it's metadata store
-        # | -----True------- | ----True---- | (C4) Search Task's DataArtifact and if not then search the Task's Metadata store
-
         _task_object = None
         if task is not None:
-            # This function will set the a `metaflow.Task` object with the right
-            # attempt number if provided.
             _task_object = _extract_task_object(task, attempt)
 
         checkpoint_data_artifact = None
@@ -275,12 +318,7 @@ class Checkpoint:
             except CheckpointNotAvailableException:
                 pass
 
-        # If the checkpoint data artifact for the Task in question is available then we can directly return the list of
-        # checkpoints from the task object.
-        # Outcome : (C2) / (C4)
         if checkpoint_data_artifact is not None:
-            # Since the data artifact will have everything in the dictionary format
-            # we will check if the user wants CheckpointArtifacts or dicts.
             return _sort_checkpoints_by_version(
                 [
                     CheckpointArtifact.hydrate(chckpt) if not as_dict else chckpt
@@ -290,29 +328,17 @@ class Checkpoint:
             )
 
         not_within_task_context = not _inside_task_context()
-        # At this point if we are not even given a Task object and we are also not even insde a Metaflow's Task execution
-        # then we can raise an error that users cannot call `Checkpoint.list` outside a Metaflow Task execution.
-        # Outcome : (C1)
         if _task_object is None and not_within_task_context:
             raise ValueError(
                 "Calling `Checkpoint.list` requires a `task` argument when its is called outside a Metaflow process."
             )
 
         if not_within_task_context and full_namespace:
-            # This means the user is trying to access checkpoints in "scope" but they are not even inside a Metaflow Task execution.
-            # context. Which is not allowed.
             raise ValueError(
                 "Calling `Checkpoint.list` with `full_namespace=False` outside a Metaflow Task's execution context is not allowed."
             )
 
-        # At this point if we have a task object then either that task's checkpoint data artifact
-        # was not written. Then we can try and do a list from the task's Metadata store.
-        # We instantiate a checkpointer and for that attempt then call the `list` method.
-        # To do this check it doesn't matter if we are within a Metaflow Task execution context or not.
-        # Outcome : (C2) / (C4)
         if _task_object is not None:
-            # If there is an explicit task object provided by the user
-            # Then we will list the checkpoints found in the task's latest attempt
             _checkpointer = _instantiate_checkpointer_for_list(_task_object)
             return _sort_checkpoints_by_version(
                 [
@@ -325,20 +351,11 @@ class Checkpoint:
                 ]
             )
 
-        # There is no task object clearly the user has called `Checkpoint.list`
-        # within a Metaflow Task execution context (if it was not within task execution context
-        # were not then we would have alreadyraised an exception). (outcome : (C1))
-        # Hence we will check if there is a checkpointer or we will safely instantiate
-        # a write checkpointer.
-        # Outcome : (C3)
         _checkpointer = self._checkpointer
         if _checkpointer is None:
             self = self._init_checkpoint_for_writes(self)
             _checkpointer = self._checkpointer
 
-        # Since at this point we know the user is calling `current.checkpoint.list`
-        # without any `task`, that means the user is trying to list all checkpoints
-        # within the current executing task.
         return _sort_checkpoints_by_version(
             [
                 chckpt.to_dict() if as_dict else chckpt
@@ -353,31 +370,51 @@ class Checkpoint:
     def load(
         self,
         reference: Union[str, Dict, CheckpointArtifact],
-        path: Optional[str] = None,
+        flow,
     ):
         """
-        loads a checkpoint reference from the datastore. (resembles a read op)
+        Loads a checkpoint and deserializes its fields back onto *flow*.
+
+        Downloads the checkpoint identified by *reference* to a temporary
+        directory, reads the ``__implicit_checkpoint__.json`` manifest, and
+        calls ``setattr(flow, field_name, value)`` for each recorded field.
 
         Parameters
         ----------
+        reference : str, dict, or CheckpointArtifact
+            The checkpoint to load — a key string, artifact dict, or
+            CheckpointArtifact object.
 
-        `reference` :
-            - can be a string, dict or a CheckpointArtifact object:
-                - string: a string reference to the checkpoint (checkpoint key)
-                - dict: a dictionary reference to the checkpoint
-                - CheckpointArtifact: a CheckpointArtifact object reference to the checkpoint
+        flow : FlowSpec
+            The Metaflow step's ``self`` — destination for deserialized values.
         """
-        if path is None and self.directory is None:
-            raise ValueError(
-                "`path` cannot be None when the Checkpoint object is not instantiated with a context manager. "
-            )
-        if path is None:
-            path = self.directory
+        with tempfile.TemporaryDirectory(prefix="mf_implicit_load_") as tmp_dir:
+            load_checkpoint(checkpoint=reference, local_path=tmp_dir)
 
-        load_checkpoint(
-            checkpoint=reference,
-            local_path=path,
-        )
+            manifest_path = os.path.join(tmp_dir, IMPLICIT_MANIFEST_FILENAME)
+            if not os.path.exists(manifest_path):
+                raise CheckpointException(
+                    "Checkpoint does not contain an implicit manifest (%s). "
+                    "This checkpoint was not saved in implicit mode."
+                    % IMPLICIT_MANIFEST_FILENAME
+                )
+
+            with open(manifest_path, "r") as f:
+                manifest_payload = json.load(f)
+
+            fields_info = manifest_payload.get("fields", {})
+            for field_name, field_info in fields_info.items():
+                fmt = field_info["format"]
+                filename = field_info["filename"]
+                filepath = os.path.join(tmp_dir, filename)
+                if not os.path.exists(filepath):
+                    raise CheckpointException(
+                        "Field file %r missing from checkpoint directory." % filename
+                    )
+                with open(filepath, "rb") as f:
+                    data = f.read()
+                value = _deserialize_value(data, fmt)
+                setattr(flow, field_name, value)
 
     def _search(
         self,
