@@ -7,6 +7,10 @@ Scenarios covered
                              crash-and-resume via @retry
 2. exclude=[...]           : listed attrs skipped; all others checkpointed
 3. serialization_config    : "raw" format for bytes payloads
+4. explicit load           : load(reference=ref) restores a specific checkpoint
+5. list() name filter      : list(name=...) returns only matching checkpoints
+6. user metadata           : metadata= in save() round-trips through the artifact dict
+7. complex Python types    : list/dict/str/float/int survive pickle via crash+resume
 
 Run (local datastore, no cloud needed):
     python test_implicit_checkpoint_flow.py run
@@ -43,6 +47,10 @@ class ImplicitCheckpointTestFlow(FlowSpec):
           → train_all_fields       (scenario 1: all attrs + crash/resume)
           → train_filtered_fields  (scenario 2: exclude=[...])
           → train_raw_bytes        (scenario 3: serialization_config raw)
+          → explicit_load          (scenario 4: load(reference=ref))
+          → list_name_filter       (scenario 5: list(name=...) filtering)
+          → user_metadata          (scenario 6: metadata= round-trip)
+          → complex_types          (scenario 7: complex types via crash+resume)
           → end
     """
 
@@ -176,6 +184,141 @@ class ImplicitCheckpointTestFlow(FlowSpec):
 
         self.completed_scenario_3 = True
         print("--- scenario 3 PASSED ---")
+        self.next(self.explicit_load)
+
+    # ------------------------------------------------------------------
+    # Scenario 4 – explicit reference load
+    # ------------------------------------------------------------------
+    @checkpoint(load_policy="none")
+    @step
+    def explicit_load(self):
+        """
+        Saves a checkpoint, clobbers two fields in memory, then restores them
+        via current.checkpoint.load(reference=ref).
+
+        Verifies that an explicit reference load correctly deserializes only
+        the checkpoint's recorded fields back onto the flow.
+        """
+        self.val = 99
+        self.tag = "before"
+        ref = current.checkpoint.save()
+
+        # clobber in-memory state
+        self.val = 0
+        self.tag = "after"
+        assert self.val == 0
+
+        # restore from the explicit reference
+        current.checkpoint.load(reference=ref)
+        assert self.val == 99, "Expected val=99 after load, got %d" % self.val
+        assert self.tag == "before", "Expected tag='before' after load, got %r" % self.tag
+
+        self.completed_scenario_4 = True
+        print("--- scenario 4 PASSED ---")
+        self.next(self.list_name_filter)
+
+    # ------------------------------------------------------------------
+    # Scenario 5 – list() name filter
+    # ------------------------------------------------------------------
+    @checkpoint(load_policy="none")
+    @step
+    def list_name_filter(self):
+        """
+        Saves 3 checkpoints: 2 named 'best', 1 named 'latest'.
+
+        Verifies:
+          - list(name='best')   returns exactly 2 entries, all with name='best'
+          - list(name='latest') returns exactly 1 entry
+          - list()              returns all 3 entries
+        """
+        self.x = 1
+        current.checkpoint.save(name="best")
+        self.x = 2
+        current.checkpoint.save(name="latest")
+        self.x = 3
+        current.checkpoint.save(name="best")
+
+        best = current.checkpoint.list(name="best")
+        latest = current.checkpoint.list(name="latest")
+        all_chkpts = current.checkpoint.list()
+
+        assert len(best) == 2, "Expected 2 'best' checkpoints, got %d" % len(best)
+        assert len(latest) == 1, "Expected 1 'latest' checkpoint, got %d" % len(latest)
+        assert len(all_chkpts) == 3, "Expected 3 total checkpoints, got %d" % len(all_chkpts)
+        for c in best:
+            assert c["name"] == "best", "Wrong name in best list: %r" % c["name"]
+
+        self.completed_scenario_5 = True
+        print("--- scenario 5 PASSED ---")
+        self.next(self.user_metadata)
+
+    # ------------------------------------------------------------------
+    # Scenario 6 – user metadata round-trip
+    # ------------------------------------------------------------------
+    @checkpoint(load_policy="none")
+    @step
+    def user_metadata(self):
+        """
+        Saves with metadata={"accuracy": 0.95, "tag": "best_so_far"} and a
+        custom name, then verifies all fields survive in the returned artifact dict.
+        """
+        self.epoch = 5
+        self.loss = 0.123
+        ref = current.checkpoint.save(
+            name="my_ckpt",
+            metadata={"accuracy": 0.95, "tag": "best_so_far"},
+        )
+
+        assert ref["name"] == "my_ckpt", "Wrong checkpoint name: %r" % ref["name"]
+        meta = ref.get("metadata", {})
+        assert meta.get("accuracy") == 0.95, (
+            "Expected accuracy=0.95, got %r" % meta.get("accuracy")
+        )
+        assert meta.get("tag") == "best_so_far", (
+            "Expected tag='best_so_far', got %r" % meta.get("tag")
+        )
+
+        self.completed_scenario_6 = True
+        print("--- scenario 6 PASSED ---")
+        self.next(self.complex_types)
+
+    # ------------------------------------------------------------------
+    # Scenario 7 – complex Python types via crash-and-resume
+    # ------------------------------------------------------------------
+    @retry(times=1)
+    @checkpoint(load_policy="fresh")
+    @step
+    def complex_types(self):
+        """
+        Attempt 0:
+          - Stores list, dict, str, float, int on self
+          - Saves a checkpoint then crashes intentionally
+
+        Attempt 1 (retry):
+          - is_loaded=True → current.checkpoint.load() restores all fields
+          - Asserts every field matches the original value exactly
+        """
+        if current.checkpoint.is_loaded:
+            current.checkpoint.load()
+            assert self.my_list == [1, 2, 3], "list mismatch: %r" % self.my_list
+            assert self.my_dict == {"a": 1, "b": [2, 3]}, (
+                "dict mismatch: %r" % self.my_dict
+            )
+            assert self.my_str == "hello", "str mismatch: %r" % self.my_str
+            assert abs(self.my_float - 3.14) < 1e-9, (
+                "float mismatch: %r" % self.my_float
+            )
+            assert self.my_int == 42, "int mismatch: %r" % self.my_int
+            self.completed_scenario_7 = True
+            print("--- scenario 7 PASSED ---")
+        else:
+            self.my_list = [1, 2, 3]
+            self.my_dict = {"a": 1, "b": [2, 3]}
+            self.my_str = "hello"
+            self.my_float = 3.14
+            self.my_int = 42
+            current.checkpoint.save()
+            raise RuntimeError("[intentional crash for complex types test]")
         self.next(self.end)
 
     # ------------------------------------------------------------------
@@ -186,6 +329,10 @@ class ImplicitCheckpointTestFlow(FlowSpec):
         assert self.completed_scenario_1
         assert self.completed_scenario_2
         assert self.completed_scenario_3
+        assert self.completed_scenario_4
+        assert self.completed_scenario_5
+        assert self.completed_scenario_6
+        assert self.completed_scenario_7
         print("=== All implicit checkpoint scenarios PASSED ===")
 
 
