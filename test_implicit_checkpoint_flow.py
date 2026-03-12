@@ -137,7 +137,7 @@ class ImplicitCheckpointTestFlow(FlowSpec):
             ref = current.checkpoint.save()
 
         # verify manifest fields
-        fields_info = ref.get("metadata", {}).get("_implicit_manifest", {}).get("fields", {})
+        fields_info = (ref.metadata or {}).get("_implicit_manifest", {}).get("fields", {})
         assert "epoch" in fields_info, "Missing 'epoch' in manifest"
         assert "loss" in fields_info, "Missing 'loss' in manifest"
         assert "scratch" not in fields_info, "'scratch' must not be checkpointed"
@@ -170,7 +170,7 @@ class ImplicitCheckpointTestFlow(FlowSpec):
             ref = current.checkpoint.save()
 
         assert ref is not None
-        implicit_manifest = ref.get("metadata", {}).get("_implicit_manifest", {})
+        implicit_manifest = (ref.metadata or {}).get("_implicit_manifest", {})
         fields_info = implicit_manifest.get("fields", {})
 
         assert "weights" in fields_info, "Missing 'weights' in manifest"
@@ -246,7 +246,7 @@ class ImplicitCheckpointTestFlow(FlowSpec):
         assert len(latest) == 1, "Expected 1 'latest' checkpoint, got %d" % len(latest)
         assert len(all_chkpts) == 3, "Expected 3 total checkpoints, got %d" % len(all_chkpts)
         for c in best:
-            assert c["name"] == "best", "Wrong name in best list: %r" % c["name"]
+            assert c.name == "best", "Wrong name in best list: %r" % c.name
 
         self.completed_scenario_5 = True
         print("--- scenario 5 PASSED ---")
@@ -269,8 +269,8 @@ class ImplicitCheckpointTestFlow(FlowSpec):
             metadata={"accuracy": 0.95, "tag": "best_so_far"},
         )
 
-        assert ref["name"] == "my_ckpt", "Wrong checkpoint name: %r" % ref["name"]
-        meta = ref.get("metadata", {})
+        assert ref.name == "my_ckpt", "Wrong checkpoint name: %r" % ref.name
+        meta = ref.metadata or {}
         assert meta.get("accuracy") == 0.95, (
             "Expected accuracy=0.95, got %r" % meta.get("accuracy")
         )
@@ -319,6 +319,35 @@ class ImplicitCheckpointTestFlow(FlowSpec):
             self.my_int = 42
             current.checkpoint.save()
             raise RuntimeError("[intentional crash for complex types test]")
+        self.next(self.auto_load_resume)
+
+    # ------------------------------------------------------------------
+    # Scenario 8 – auto_load=True eliminates is_loaded/load() boilerplate
+    # ------------------------------------------------------------------
+    @retry(times=1)
+    @checkpoint(load_policy="fresh", auto_load=True)
+    @step
+    def auto_load_resume(self):
+        """
+        Attempt 0:
+          - Sets self.counter = 10, saves a checkpoint, then crashes intentionally.
+
+        Attempt 1 (retry):
+          - auto_load=True means the decorator has already called load() before
+            this body runs — no is_loaded / load() boilerplate needed.
+          - Asserts self.counter == 10 to confirm the restore happened.
+        """
+        if current.retry_count == 0:
+            self.counter = 10
+            current.checkpoint.save()
+            raise RuntimeError("[intentional crash for auto_load test]")
+
+        # Attempt 1: checkpoint was already loaded by the decorator.
+        assert self.counter == 10, (
+            "Expected counter=10 after auto_load restore, got %d" % self.counter
+        )
+        self.completed_scenario_8 = True
+        print("--- scenario 8 PASSED ---")
         self.next(self.end)
 
     # ------------------------------------------------------------------
@@ -333,6 +362,7 @@ class ImplicitCheckpointTestFlow(FlowSpec):
         assert self.completed_scenario_5
         assert self.completed_scenario_6
         assert self.completed_scenario_7
+        assert self.completed_scenario_8
         print("=== All implicit checkpoint scenarios PASSED ===")
 
 

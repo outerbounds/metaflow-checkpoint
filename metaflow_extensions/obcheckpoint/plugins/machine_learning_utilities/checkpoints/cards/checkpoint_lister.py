@@ -413,7 +413,10 @@ class CheckpointsCollector(Thread):
         self._refresher = refresher
 
     def collect(self):
-        return list(self.current.checkpoint.list(attempt=self.current.retry_count))
+        return [
+            c.to_dict()
+            for c in self.current.checkpoint.list(attempt=self.current.retry_count)
+        ]
 
     def final_update(self):
         current_card = self.current.card[self._refresher.CARD_ID]

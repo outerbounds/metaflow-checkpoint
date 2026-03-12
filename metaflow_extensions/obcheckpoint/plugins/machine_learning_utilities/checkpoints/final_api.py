@@ -161,7 +161,7 @@ class Checkpoint:
         latest=True,
         storage_format=DEFAULT_STORAGE_FORMAT,
         temp_dir_root=None,
-    ) -> Dict:
+    ) -> CheckpointArtifact:
         """
         Serializes public attributes of *flow* into a checkpoint.
 
@@ -229,7 +229,7 @@ class Checkpoint:
                 metadata=final_metadata,
                 latest=latest,
                 storage_format=storage_format,
-            ).to_dict()
+            )
 
     @classmethod
     def _init_checkpoint_for_writes(cls, self):

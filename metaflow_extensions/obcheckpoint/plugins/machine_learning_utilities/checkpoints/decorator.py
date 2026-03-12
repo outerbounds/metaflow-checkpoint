@@ -219,6 +219,12 @@ class CurrentCheckpointer:
         storage_format : str, optional
             If ``tar``, the checkpoint directory is tarred before uploading.
             If ``files`` (default), files are uploaded directly.
+
+        Returns
+        -------
+        CheckpointArtifact
+            A typed checkpoint reference with ``.name``, ``.url``, ``.metadata``,
+            ``.key``, ``.pathspec``, ``.created_on``, and other fields.
         """
         return self._default_checkpointer.save(
             flow=self._flow,
@@ -237,7 +243,7 @@ class CurrentCheckpointer:
         task: Optional[Union[str, "metaflow.Task"]] = None,
         attempt: Optional[int] = None,
         full_namespace: bool = False,  # If True, list all checkpoints in the full namespace
-    ) -> List[Dict]:
+    ) -> List[CheckpointArtifact]:
         """
         lists the checkpoints in the current task or the specified task.
 
@@ -286,13 +292,13 @@ class CurrentCheckpointer:
 
         Returns
         -------
-        List[Dict]
+        List[CheckpointArtifact]
         """
         return self._default_checkpointer.list(
             name=name,
             task=task,
             attempt=attempt,
-            as_dict=True,
+            as_dict=False,
             full_namespace=full_namespace,
         )
 
@@ -443,6 +449,17 @@ class CheckpointDecorator(StepDecorator):
         ``{field_name: format}`` overrides.  Supported formats are
         ``"pickle"`` (default) and ``"raw"`` (for ``bytes``/``bytearray``).
 
+    auto_load : bool, default: False
+        If True, automatically calls ``current.checkpoint.load()`` before the
+        step body runs whenever a checkpoint is detected at task start
+        (i.e. ``is_loaded`` is True).  Equivalent to writing::
+
+            if current.checkpoint.is_loaded:
+                current.checkpoint.load()
+
+        at the top of every step. Combine with ``load_policy="fresh"`` for
+        automatic crash-and-resume on retries, or ``load_policy="eager"`` to
+        warm-start from any prior run.
 
     MF Add To Current
     -----------------
@@ -473,6 +490,8 @@ class CheckpointDecorator(StepDecorator):
         "exclude": None,
         # `serialization_config` is a {field_name: format} dict; format is "pickle" or "raw".
         "serialization_config": None,
+        # `auto_load` automatically calls load() before the step runs if a checkpoint is found.
+        "auto_load": False,
     }
 
     LOAD_POLCIES = [
@@ -632,10 +651,18 @@ class CheckpointDecorator(StepDecorator):
             interval=3,
         )
 
-        def _wrapped_step_func(_collector_thread, *args, **kwargs):
+        auto_load = self.attributes.get("auto_load", False)
 
+        def _wrapped_step_func(_collector_thread, *args, **kwargs):
             _collector_thread.start()
             try:
+                if auto_load and self._chkptr.is_loaded:
+                    warning_message(
+                        "auto_load: restoring checkpoint before step runs",
+                        logger=self._logger,
+                        ts=False,
+                    )
+                    self._chkptr.load()
                 return step_func(*args, **kwargs)
             finally:
                 _collector_thread.stop()
