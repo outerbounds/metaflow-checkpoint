@@ -220,13 +220,11 @@ class Checkpoint:
             with open(os.path.join(tmp_dir, IMPLICIT_MANIFEST_FILENAME), "w") as f:
                 json.dump(manifest_payload, f, indent=2)
 
-            final_metadata = dict(metadata)
-            final_metadata["_implicit_manifest"] = manifest_payload
-
             return self._checkpointer.save(
                 path=tmp_dir,
                 name=name,
-                metadata=final_metadata,
+                metadata=dict(metadata),
+                internal_metadata=manifest_payload,
                 latest=latest,
                 storage_format=storage_format,
             )

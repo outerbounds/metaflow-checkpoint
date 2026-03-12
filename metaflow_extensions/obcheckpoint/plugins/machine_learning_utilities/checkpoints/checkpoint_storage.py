@@ -421,6 +421,7 @@ class CheckpointDatastore(DatastoreInterface):
         version_id,
         name=DEFAULT_NAME,
         metadata={},
+        internal_metadata=None,
         set_latest=True,
         storage_format=DEFAULT_STORAGE_FORMAT,
     ) -> CheckpointArtifact:
@@ -470,6 +471,8 @@ class CheckpointDatastore(DatastoreInterface):
             creation_context="task",
             version_id=version_id,
         )
+        if internal_metadata is not None:
+            _metadata["internal_metadata"] = safe_serialize(internal_metadata)
 
         _art_key = self.create_key_name(
             self._NAME_ENTROPY,

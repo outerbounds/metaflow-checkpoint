@@ -137,7 +137,7 @@ class ImplicitCheckpointTestFlow(FlowSpec):
             ref = current.checkpoint.save()
 
         # verify manifest fields
-        fields_info = (ref.metadata or {}).get("_implicit_manifest", {}).get("fields", {})
+        fields_info = (ref.implicit_manifest or {}).get("fields", {})
         assert "epoch" in fields_info, "Missing 'epoch' in manifest"
         assert "loss" in fields_info, "Missing 'loss' in manifest"
         assert "scratch" not in fields_info, "'scratch' must not be checkpointed"
@@ -170,7 +170,7 @@ class ImplicitCheckpointTestFlow(FlowSpec):
             ref = current.checkpoint.save()
 
         assert ref is not None
-        implicit_manifest = (ref.metadata or {}).get("_implicit_manifest", {})
+        implicit_manifest = ref.implicit_manifest or {}
         fields_info = implicit_manifest.get("fields", {})
 
         assert "weights" in fields_info, "Missing 'weights' in manifest"
@@ -276,6 +276,9 @@ class ImplicitCheckpointTestFlow(FlowSpec):
         )
         assert meta.get("tag") == "best_so_far", (
             "Expected tag='best_so_far', got %r" % meta.get("tag")
+        )
+        assert "_implicit_manifest" not in meta, (
+            "_implicit_manifest must not appear in user-visible metadata"
         )
 
         self.completed_scenario_6 = True
