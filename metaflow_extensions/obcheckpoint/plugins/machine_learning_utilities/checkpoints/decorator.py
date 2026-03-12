@@ -10,7 +10,6 @@ from .cards import create_checkpoint_card, null_card
 from .lineage import checkpoint_load_related_metadata, trace_lineage
 from .constructors import (
     DEFAULT_NAME,
-    load_checkpoint,
     _instantiate_checkpoint_for_writes,
 )
 from .core import (
@@ -194,7 +193,6 @@ class CurrentCheckpointer:
 
     def save(
         self,
-        path=None,
         name: Optional[str] = DEFAULT_NAME,
         metadata: Optional[Dict] = {},
         latest: bool = True,
@@ -299,9 +297,6 @@ class CurrentCheckpointer:
         )
 
     def cleanup(self):
-        pass
-
-    def refresh_directory(self):
         pass
 
     def load(

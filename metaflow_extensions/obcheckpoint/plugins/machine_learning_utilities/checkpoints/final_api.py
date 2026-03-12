@@ -135,11 +135,9 @@ class Checkpoint:
 
     _checkpointer: "Checkpointer" = None
 
-    def __init__(self, temp_dir_root=None, init_dir=False):
+    def __init__(self, temp_dir_root=None):
         self._temp_dir_root = temp_dir_root
         self._checkpoint_dir = None
-        if init_dir:
-            self._checkpoint_dir = tempfile.TemporaryDirectory(dir=self._temp_dir_root)
 
     @property
     def directory(self) -> Optional[str]:
@@ -248,11 +246,6 @@ class Checkpoint:
                 )
             )
         return self
-
-    def generate_key(self, name: str, version_id: int = None):
-        if self._checkpointer is None:
-            self = self._init_checkpoint_for_writes(self)
-        return self._checkpointer.artifact_id(name, version_id)
 
     def __enter__(self):
         if self._checkpoint_dir is None:
