@@ -16,6 +16,8 @@ Run (local datastore, no cloud needed):
     python test_implicit_checkpoint_flow.py run
 """
 
+import json
+
 from metaflow import FlowSpec, step, current, checkpoint, retry, card
 from metaflow.cards import Markdown, Table
 
@@ -50,8 +52,8 @@ def _render_tree(node, prefix=""):
 
 def _emit_checkpoint_dir_card(card_id="checkpoint_dir"):
     """
-    Appends a directory-tree view and a details table of saved checkpoints
-    to current.card[card_id].  Call at the end of any @checkpoint step.
+    Appends a directory-tree view, a details table, and per-checkpoint manifest
+    contents to current.card[card_id].  Call at the end of any @checkpoint step.
     """
     artifacts = current.checkpoint.list()
     c = current.card[card_id]
@@ -60,9 +62,15 @@ def _emit_checkpoint_dir_card(card_id="checkpoint_dir"):
         c.append(Markdown("*No checkpoints found for this step.*"))
         return
 
-    # --- directory tree ---
-    keys = [a.key for a in artifacts]
-    tree = _make_tree(keys)
+    # --- directory tree (expanded to show individual files) ---
+    all_paths = []
+    for a in artifacts:
+        fields = (a.implicit_manifest or {}).get("fields", {})
+        # manifest sidecar always present
+        all_paths.append(a.key + "/__implicit_checkpoint__.json")
+        for field_info in sorted(fields.values(), key=lambda x: x["filename"]):
+            all_paths.append(a.key + "/" + field_info["filename"])
+    tree = _make_tree(all_paths)
     tree_lines = _render_tree(tree)
     c.append(Markdown("## Checkpoint Directory Structure"))
     c.append(Markdown("```\n" + "\n".join(tree_lines) + "\n```"))
@@ -71,13 +79,12 @@ def _emit_checkpoint_dir_card(card_id="checkpoint_dir"):
     c.append(Markdown("## Checkpoint Details"))
     rows = []
     for a in sorted(artifacts, key=lambda x: x.created_on):
-        filename = a.key.split("/")[-1]
-        # parse filename: {pathspec_hash}.{attempt}.{name}.{version_id}
-        parts = filename.split(".")
+        ck_dir = a.key.split("/")[-1]
+        parts = ck_dir.split(".")
         attempt_val = parts[1] if len(parts) > 1 else "?"
         fields = sorted((a.implicit_manifest or {}).get("fields", {}).keys())
         rows.append([
-            filename,
+            ck_dir,
             a.name or "",
             attempt_val,
             a.created_on[:19],
@@ -85,9 +92,20 @@ def _emit_checkpoint_dir_card(card_id="checkpoint_dir"):
             str(a.metadata or {}),
         ])
     c.append(Table(
-        headers=["Filename", "Name", "Attempt", "Created", "Fields", "User Metadata"],
+        headers=["Checkpoint dir", "Name", "Attempt", "Created", "Fields", "User Metadata"],
         data=rows,
     ))
+
+    # --- manifest contents per checkpoint ---
+    c.append(Markdown("## Implicit Checkpoint Manifests"))
+    for a in sorted(artifacts, key=lambda x: x.created_on):
+        ck_dir = a.key.split("/")[-1]
+        manifest = a.implicit_manifest
+        if manifest is None:
+            c.append(Markdown("**%s** — no implicit manifest" % ck_dir))
+        else:
+            c.append(Markdown("**%s**" % ck_dir))
+            c.append(Markdown("```json\n%s\n```" % json.dumps(manifest, indent=2)))
 
 
 # ---------------------------------------------------------------------------
