@@ -476,6 +476,41 @@ class Checkpoint:
                 value = _deserialize_value(data, fmt)
                 setattr(flow, field_name, value)
 
+    @staticmethod
+    def inspect(
+        reference: Union[str, Dict, CheckpointArtifact],
+    ) -> Optional[Dict]:
+        """
+        Returns the implicit checkpoint manifest without downloading checkpoint files.
+
+        Reads field names, formats, and filenames from the stored metadata record
+        rather than downloading the checkpoint, making this a fast metadata-only
+        operation suitable for inspecting large checkpoints.
+
+        Parameters
+        ----------
+        reference : str, dict, or CheckpointArtifact
+            The checkpoint to inspect — a key string, artifact dict, or
+            CheckpointArtifact object.
+
+        Returns
+        -------
+        dict or None
+            The implicit manifest (``{"version": 1, "fields": {...}}``), or
+            ``None`` if the checkpoint was not saved in implicit mode.
+        """
+        if isinstance(reference, CheckpointArtifact):
+            return reference.implicit_manifest
+        if isinstance(reference, dict):
+            return CheckpointArtifact.hydrate(reference).implicit_manifest
+        if isinstance(reference, str):
+            art = CheckpointArtifact._load_metadata_from_key(reference, None)
+            return art.implicit_manifest
+        raise ValueError(
+            "reference must be a CheckpointArtifact, dict, or key string, got %r"
+            % type(reference)
+        )
+
     def _search(
         self,
         pathspec: Optional[str] = None,

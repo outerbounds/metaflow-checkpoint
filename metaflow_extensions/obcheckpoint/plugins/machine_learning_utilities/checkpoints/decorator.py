@@ -302,6 +302,34 @@ class CurrentCheckpointer:
             full_namespace=full_namespace,
         )
 
+    def inspect(
+        self,
+        reference: Optional[Union[str, Dict, CheckpointArtifact]] = None,
+    ) -> Optional[Dict]:
+        """
+        Returns the implicit checkpoint manifest without downloading checkpoint files.
+
+        Parameters
+        ----------
+        reference : str, dict, CheckpointArtifact, or None
+            The checkpoint to inspect.  When ``None``, uses the checkpoint
+            detected at task start (``is_loaded`` must be ``True``).
+
+        Returns
+        -------
+        dict or None
+            The implicit manifest (``{"version": 1, "fields": {...}}``), or
+            ``None`` if the checkpoint was not saved in implicit mode.
+        """
+        if reference is None:
+            if not self.is_loaded:
+                raise CheckpointException(
+                    "current.checkpoint.inspect() was called without a reference "
+                    "but no checkpoint was detected at task start (is_loaded is False)."
+                )
+            reference = self._loaded_checkpoint
+        return Checkpoint.inspect(reference)
+
     def cleanup(self):
         pass
 

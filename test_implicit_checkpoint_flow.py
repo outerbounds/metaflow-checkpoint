@@ -51,6 +51,8 @@ class ImplicitCheckpointTestFlow(FlowSpec):
           → list_name_filter       (scenario 5: list(name=...) filtering)
           → user_metadata          (scenario 6: metadata= round-trip)
           → complex_types          (scenario 7: complex types via crash+resume)
+          → auto_load_resume       (scenario 8: auto_load=True)
+          → inspect_checkpoint     (scenario 9: inspect() without download)
           → end
     """
 
@@ -351,6 +353,50 @@ class ImplicitCheckpointTestFlow(FlowSpec):
         )
         self.completed_scenario_8 = True
         print("--- scenario 8 PASSED ---")
+        self.next(self.inspect_checkpoint)
+
+    # ------------------------------------------------------------------
+    # Scenario 9 – inspect() returns manifest without downloading files
+    # ------------------------------------------------------------------
+    @checkpoint(
+        serialization_config={"weights": "raw"},
+        load_policy="none",
+    )
+    @step
+    def inspect_checkpoint(self):
+        """
+        Saves one checkpoint then verifies inspect() returns the correct manifest
+        via three different reference types (artifact, dict, key string) — all
+        without triggering a full checkpoint download.
+        """
+        self.weights = _fake_weights(seed=3)
+        self.epoch = 7
+        ref = current.checkpoint.save(name="inspect_me")
+
+        # --- via CheckpointArtifact (direct attribute) ---
+        manifest = current.checkpoint.inspect(ref)
+        assert manifest is not None, "inspect(artifact) returned None"
+        fields = manifest.get("fields", {})
+        assert "weights" in fields, "Missing 'weights' in inspected manifest"
+        assert "epoch" in fields, "Missing 'epoch' in inspected manifest"
+        assert fields["weights"]["format"] == "raw"
+        assert fields["epoch"]["format"] == "pickle"
+
+        # --- via dict ---
+        manifest_from_dict = current.checkpoint.inspect(ref.to_dict())
+        assert manifest_from_dict == manifest, "inspect(dict) mismatch"
+
+        # --- via key string (metadata-only lookup, no file download) ---
+        manifest_from_key = current.checkpoint.inspect(ref.key)
+        assert manifest_from_key == manifest, "inspect(key) mismatch"
+
+        # --- ref.metadata must still be clean (no _implicit_manifest) ---
+        assert "_implicit_manifest" not in (ref.metadata or {}), (
+            "_implicit_manifest must not appear in ref.metadata"
+        )
+
+        self.completed_scenario_9 = True
+        print("--- scenario 9 PASSED ---")
         self.next(self.end)
 
     # ------------------------------------------------------------------
@@ -366,6 +412,7 @@ class ImplicitCheckpointTestFlow(FlowSpec):
         assert self.completed_scenario_6
         assert self.completed_scenario_7
         assert self.completed_scenario_8
+        assert self.completed_scenario_9
         print("=== All implicit checkpoint scenarios PASSED ===")
 
 
