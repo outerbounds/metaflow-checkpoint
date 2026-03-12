@@ -34,23 +34,37 @@ RAW_FORMAT = "raw"
 _SUPPORTED_FORMATS = (PICKLE_FORMAT, RAW_FORMAT)
 
 
-def _get_implicit_fields(flow, exclude) -> List[Tuple[str, Any]]:
+def _get_implicit_fields(flow, exclude=None, include=None) -> List[Tuple[str, Any]]:
     """Return list of (field_name, value) to checkpoint.
 
-    Scans ``flow.__dict__`` and returns every non-underscore, non-callable
-    attribute that is not in *exclude*.
+    ``include`` and ``exclude`` are mutually exclusive (matching the behaviour
+    of Metaflow's ``merge_artifacts``).  If ``include`` is given, only those
+    fields are returned and a ``ValueError`` is raised for any name not present
+    on *flow*.  If ``exclude`` is given, all public fields except the listed
+    names are returned.
     """
+    if include and exclude:
+        raise ValueError("`include` and `exclude` are mutually exclusive in @checkpoint")
+
+    all_public = [
+        (name, value)
+        for name, value in flow.__dict__.items()
+        if not name.startswith("_") and not callable(value)
+    ]
+
+    if include:
+        include_set = set(include)
+        available = {name for name, _ in all_public}
+        missing = include_set - available
+        if missing:
+            raise ValueError(
+                "Fields specified in `include` not found on self: %s"
+                % sorted(missing)
+            )
+        return [(name, value) for name, value in all_public if name in include_set]
+
     exclude_set = set(exclude or [])
-    result = []
-    for name, value in flow.__dict__.items():
-        if name.startswith("_"):
-            continue
-        if callable(value):
-            continue
-        if name in exclude_set:
-            continue
-        result.append((name, value))
-    return result
+    return [(name, value) for name, value in all_public if name not in exclude_set]
 
 
 def _serialize_value(value, fmt) -> bytes:
@@ -155,6 +169,7 @@ class Checkpoint:
         self,
         flow,
         exclude=None,
+        include=None,
         serialization_config=None,
         name=DEFAULT_NAME,
         metadata={},
@@ -173,6 +188,13 @@ class Checkpoint:
         exclude : list of str, optional
             Attribute names to skip.  All other public non-underscore,
             non-callable attributes on ``flow.__dict__`` are checkpointed.
+            Cannot be specified together with ``include``.
+
+        include : list of str, optional
+            Explicit list of attribute names to checkpoint.  Only these fields
+            are saved; all others are ignored.  Raises ``ValueError`` if any
+            name is not present on *flow* at save time.
+            Cannot be specified together with ``exclude``.
 
         serialization_config : dict, optional
             ``{field_name: format}`` overrides.  Supported formats are
@@ -195,13 +217,13 @@ class Checkpoint:
             self = self._init_checkpoint_for_writes(self)
 
         serialization_config = serialization_config or {}
-        field_items = _get_implicit_fields(flow, exclude)
+        field_items = _get_implicit_fields(flow, exclude=exclude, include=include)
 
         if not field_items:
             raise ValueError(
-                "No fields found to checkpoint. Either specify `exclude=[...]` "
-                "to control which fields are skipped, or set public attributes on "
-                "self before calling current.checkpoint.save()."
+                "No fields found to checkpoint. Use `include=[...]` to specify "
+                "which fields to save, `exclude=[...]` to skip specific fields, "
+                "or set public attributes on self before calling current.checkpoint.save()."
             )
 
         field_manifest = {}

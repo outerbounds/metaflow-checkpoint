@@ -128,6 +128,7 @@ class CurrentCheckpointer:
         logger,
         gang_scheduled_task=False,
         exclude=None,
+        include=None,
         serialization_config=None,
         temp_dir_root=None,
     ) -> None:
@@ -156,6 +157,7 @@ class CurrentCheckpointer:
         self._flow_name = flow.name
         self._resolved_scope = resolved_scope
         self._exclude = exclude
+        self._include = include
         self._serialization_config = serialization_config or {}
         os.environ[CHECKPOINT_TASK_IDENTIFIER_ENV_VAR_NAME] = self._task_identifier
         os.environ[CHECKPOINT_UID_ENV_VAR_NAME] = str(
@@ -201,9 +203,10 @@ class CurrentCheckpointer:
         """
         Serializes public attributes of the flow step into a checkpoint.
 
-        Automatically checkpoints all public non-underscore, non-callable
-        attributes on ``self`` (the FlowSpec instance), excluding any names
-        passed as ``exclude`` to the ``@checkpoint`` decorator.
+        Automatically checkpoints public non-underscore, non-callable
+        attributes on ``self`` (the FlowSpec instance).  The set of fields
+        is controlled by the ``include`` or ``exclude`` parameter on the
+        ``@checkpoint`` decorator (they are mutually exclusive).
 
         Parameters
         ----------
@@ -229,6 +232,7 @@ class CurrentCheckpointer:
         return self._default_checkpointer.save(
             flow=self._flow,
             exclude=self._exclude,
+            include=self._include,
             serialization_config=self._serialization_config,
             name=name,
             metadata=metadata,
@@ -472,6 +476,13 @@ class CheckpointDecorator(StepDecorator):
     exclude : list of str, default: None
         Attribute names to skip when checkpointing.  All other public
         non-underscore, non-callable attributes on ``self`` are saved.
+        Cannot be specified together with ``include``.
+
+    include : list of str, default: None
+        Explicit list of attribute names to checkpoint.  Only these fields
+        are saved; all others are ignored.  Raises ``ValueError`` at save
+        time if any name is not present on ``self``.
+        Cannot be specified together with ``exclude``.
 
     serialization_config : dict, default: None
         ``{field_name: format}`` overrides.  Supported formats are
@@ -502,8 +513,10 @@ class CheckpointDecorator(StepDecorator):
         "load_policy": "fresh",
         # `temp_dir_root` controls where OS temporary directories are created during save/load.
         "temp_dir_root": None,
-        # `exclude` is a list of field names to skip when checkpointing; None = checkpoint all public attrs.
+        # `exclude` skips the listed field names; mutually exclusive with `include`.
         "exclude": None,
+        # `include` checkpoints only the listed field names; mutually exclusive with `exclude`.
+        "include": None,
         # `serialization_config` is a {field_name: format} dict; format is "pickle" or "raw".
         "serialization_config": None,
     }
@@ -720,6 +733,7 @@ class CheckpointDecorator(StepDecorator):
             logger=self._logger,
             gang_scheduled_task=gang_scheduled_task,
             exclude=self.attributes.get("exclude"),
+            include=self.attributes.get("include"),
             serialization_config=self.attributes.get("serialization_config"),
             temp_dir_root=temp_dir_root,
         )

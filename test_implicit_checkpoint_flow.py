@@ -12,6 +12,7 @@ Scenarios covered
 6. user metadata           : metadata= in save() round-trips through the artifact dict
 7. complex Python types    : list/dict/str/float/int survive pickle via crash+resume
 8. inspect()              : returns manifest without downloading checkpoint files
+9. include=[...]          : only listed attrs checkpointed; exclude conflict raises
 
 Run (local datastore, no cloud needed):
     python test_implicit_checkpoint_flow.py run
@@ -140,6 +141,7 @@ class ImplicitCheckpointTestFlow(FlowSpec):
           → user_metadata          (scenario 6: metadata= round-trip)
           → complex_types          (scenario 7: complex types via crash+resume)
           → inspect_checkpoint     (scenario 8: inspect() without download)
+          → include_filter         (scenario 9: include=[...] field selection)
           → end
     """
 
@@ -471,6 +473,53 @@ class ImplicitCheckpointTestFlow(FlowSpec):
         self.completed_scenario_8 = True
         print("--- scenario 8 PASSED ---")
         _emit_checkpoint_dir_card()
+        self.next(self.include_filter)
+
+    # ------------------------------------------------------------------
+    # Scenario 9 – include=[...] field selection
+    # ------------------------------------------------------------------
+    @checkpoint(include=["epoch", "loss"], load_policy="none")
+    @card(id="checkpoint_dir")
+    @step
+    def include_filter(self):
+        """
+        Only 'epoch' and 'loss' are in the include list; 'scratch' is not.
+
+        Verifies:
+          - manifest contains exactly 'epoch' and 'loss'
+          - 'scratch' is absent from the manifest
+          - specifying both include and exclude raises ValueError
+        """
+        self.epoch = 3
+        self.loss = 0.42
+        self.scratch = "ignored"
+
+        ref = current.checkpoint.save()
+        fields_info = (ref.implicit_manifest or {}).get("fields", {})
+        assert "epoch" in fields_info, "Missing 'epoch' in manifest"
+        assert "loss" in fields_info, "Missing 'loss' in manifest"
+        assert "scratch" not in fields_info, "'scratch' must not be checkpointed"
+        assert len(fields_info) == 2, (
+            "Expected exactly 2 fields, got %d: %s" % (len(fields_info), sorted(fields_info))
+        )
+
+        # include and exclude are mutually exclusive — must raise
+        try:
+            current.checkpoint.save.__func__  # ensure it's the right object
+        except AttributeError:
+            pass
+        from metaflow_extensions.obcheckpoint.plugins.machine_learning_utilities.checkpoints.final_api import (
+            _get_implicit_fields,
+        )
+        try:
+            _get_implicit_fields(self, exclude=["scratch"], include=["epoch"])
+            assert False, "Expected ValueError for include+exclude conflict"
+        except ValueError as e:
+            assert "mutually exclusive" in str(e), "Unexpected error: %s" % e
+
+        self.completed_scenario_9 = True
+        print("--- scenario 9 PASSED ---")
+        _emit_checkpoint_dir_card()
         self.next(self.end)
 
     # ------------------------------------------------------------------
@@ -486,6 +535,7 @@ class ImplicitCheckpointTestFlow(FlowSpec):
         assert self.completed_scenario_6
         assert self.completed_scenario_7
         assert self.completed_scenario_8
+        assert self.completed_scenario_9
         print("=== All implicit checkpoint scenarios PASSED ===")
 
 
