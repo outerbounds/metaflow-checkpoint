@@ -16,11 +16,80 @@ Run (local datastore, no cloud needed):
     python test_implicit_checkpoint_flow.py run
 """
 
-from metaflow import FlowSpec, step, current, checkpoint, retry
+from metaflow import FlowSpec, step, current, checkpoint, retry, card
+from metaflow.cards import Markdown, Table
 
 
 # ---------------------------------------------------------------------------
 # helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_tree(keys):
+    """Build a nested dict from a list of slash-separated path strings."""
+    root = {}
+    for key in keys:
+        node = root
+        for part in key.split("/"):
+            node = node.setdefault(part, {})
+    return root
+
+
+def _render_tree(node, prefix=""):
+    """Render a nested dict as ASCII tree lines."""
+    lines = []
+    items = sorted(node.items())
+    for i, (name, children) in enumerate(items):
+        is_last = i == len(items) - 1
+        connector = "└── " if is_last else "├── "
+        lines.append(prefix + connector + name)
+        extension = "    " if is_last else "│   "
+        lines.extend(_render_tree(children, prefix + extension))
+    return lines
+
+
+def _emit_checkpoint_dir_card(card_id="checkpoint_dir"):
+    """
+    Appends a directory-tree view and a details table of saved checkpoints
+    to current.card[card_id].  Call at the end of any @checkpoint step.
+    """
+    artifacts = current.checkpoint.list()
+    c = current.card[card_id]
+
+    if not artifacts:
+        c.append(Markdown("*No checkpoints found for this step.*"))
+        return
+
+    # --- directory tree ---
+    keys = [a.key for a in artifacts]
+    tree = _make_tree(keys)
+    tree_lines = _render_tree(tree)
+    c.append(Markdown("## Checkpoint Directory Structure"))
+    c.append(Markdown("```\n" + "\n".join(tree_lines) + "\n```"))
+
+    # --- details table ---
+    c.append(Markdown("## Checkpoint Details"))
+    rows = []
+    for a in sorted(artifacts, key=lambda x: x.created_on):
+        filename = a.key.split("/")[-1]
+        # parse filename: {pathspec_hash}.{attempt}.{name}.{version_id}
+        parts = filename.split(".")
+        attempt_val = parts[1] if len(parts) > 1 else "?"
+        fields = sorted((a.implicit_manifest or {}).get("fields", {}).keys())
+        rows.append([
+            filename,
+            a.name or "",
+            attempt_val,
+            a.created_on[:19],
+            ", ".join(fields) or "(none)",
+            str(a.metadata or {}),
+        ])
+    c.append(Table(
+        headers=["Filename", "Name", "Attempt", "Created", "Fields", "User Metadata"],
+        data=rows,
+    ))
+
+
 # ---------------------------------------------------------------------------
 
 def _fake_weights(seed=42):
@@ -69,6 +138,7 @@ class ImplicitCheckpointTestFlow(FlowSpec):
     # ------------------------------------------------------------------
     @retry(times=1)
     @checkpoint(load_policy="fresh")
+    @card(id="checkpoint_dir")
     @step
     def train_all_fields(self):
         """
@@ -113,12 +183,14 @@ class ImplicitCheckpointTestFlow(FlowSpec):
         assert self.loss < 1.0
         self.completed_scenario_1 = True
         print("--- scenario 1 PASSED ---")
+        _emit_checkpoint_dir_card()
         self.next(self.train_filtered_fields)
 
     # ------------------------------------------------------------------
     # Scenario 2 – exclude filter
     # ------------------------------------------------------------------
     @checkpoint(exclude=["scratch"], load_policy="none")
+    @card(id="checkpoint_dir")
     @step
     def train_filtered_fields(self):
         """
@@ -146,6 +218,7 @@ class ImplicitCheckpointTestFlow(FlowSpec):
 
         self.completed_scenario_2 = True
         print("--- scenario 2 PASSED ---")
+        _emit_checkpoint_dir_card()
         self.next(self.train_raw_bytes)
 
     # ------------------------------------------------------------------
@@ -155,6 +228,7 @@ class ImplicitCheckpointTestFlow(FlowSpec):
         serialization_config={"weights": "raw"},
         load_policy="none",
     )
+    @card(id="checkpoint_dir")
     @step
     def train_raw_bytes(self):
         """
@@ -186,12 +260,14 @@ class ImplicitCheckpointTestFlow(FlowSpec):
 
         self.completed_scenario_3 = True
         print("--- scenario 3 PASSED ---")
+        _emit_checkpoint_dir_card()
         self.next(self.explicit_load)
 
     # ------------------------------------------------------------------
     # Scenario 4 – explicit reference load
     # ------------------------------------------------------------------
     @checkpoint(load_policy="none")
+    @card(id="checkpoint_dir")
     @step
     def explicit_load(self):
         """
@@ -217,12 +293,14 @@ class ImplicitCheckpointTestFlow(FlowSpec):
 
         self.completed_scenario_4 = True
         print("--- scenario 4 PASSED ---")
+        _emit_checkpoint_dir_card()
         self.next(self.list_name_filter)
 
     # ------------------------------------------------------------------
     # Scenario 5 – list() name filter
     # ------------------------------------------------------------------
     @checkpoint(load_policy="none")
+    @card(id="checkpoint_dir")
     @step
     def list_name_filter(self):
         """
@@ -252,12 +330,14 @@ class ImplicitCheckpointTestFlow(FlowSpec):
 
         self.completed_scenario_5 = True
         print("--- scenario 5 PASSED ---")
+        _emit_checkpoint_dir_card()
         self.next(self.user_metadata)
 
     # ------------------------------------------------------------------
     # Scenario 6 – user metadata round-trip
     # ------------------------------------------------------------------
     @checkpoint(load_policy="none")
+    @card(id="checkpoint_dir")
     @step
     def user_metadata(self):
         """
@@ -285,6 +365,7 @@ class ImplicitCheckpointTestFlow(FlowSpec):
 
         self.completed_scenario_6 = True
         print("--- scenario 6 PASSED ---")
+        _emit_checkpoint_dir_card()
         self.next(self.complex_types)
 
     # ------------------------------------------------------------------
@@ -292,6 +373,7 @@ class ImplicitCheckpointTestFlow(FlowSpec):
     # ------------------------------------------------------------------
     @retry(times=1)
     @checkpoint(load_policy="fresh")
+    @card(id="checkpoint_dir")
     @step
     def complex_types(self):
         """
@@ -316,6 +398,7 @@ class ImplicitCheckpointTestFlow(FlowSpec):
             assert self.my_int == 42, "int mismatch: %r" % self.my_int
             self.completed_scenario_7 = True
             print("--- scenario 7 PASSED ---")
+            _emit_checkpoint_dir_card()
         else:
             self.my_list = [1, 2, 3]
             self.my_dict = {"a": 1, "b": [2, 3]}
@@ -331,6 +414,7 @@ class ImplicitCheckpointTestFlow(FlowSpec):
     # ------------------------------------------------------------------
     @retry(times=1)
     @checkpoint(load_policy="fresh", auto_load=True)
+    @card(id="checkpoint_dir")
     @step
     def auto_load_resume(self):
         """
@@ -353,6 +437,7 @@ class ImplicitCheckpointTestFlow(FlowSpec):
         )
         self.completed_scenario_8 = True
         print("--- scenario 8 PASSED ---")
+        _emit_checkpoint_dir_card()
         self.next(self.inspect_checkpoint)
 
     # ------------------------------------------------------------------
@@ -362,6 +447,7 @@ class ImplicitCheckpointTestFlow(FlowSpec):
         serialization_config={"weights": "raw"},
         load_policy="none",
     )
+    @card(id="checkpoint_dir")
     @step
     def inspect_checkpoint(self):
         """
@@ -397,6 +483,7 @@ class ImplicitCheckpointTestFlow(FlowSpec):
 
         self.completed_scenario_9 = True
         print("--- scenario 9 PASSED ---")
+        _emit_checkpoint_dir_card()
         self.next(self.end)
 
     # ------------------------------------------------------------------
