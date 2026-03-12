@@ -11,6 +11,7 @@ Scenarios covered
 5. list() name filter      : list(name=...) returns only matching checkpoints
 6. user metadata           : metadata= in save() round-trips through the artifact dict
 7. complex Python types    : list/dict/str/float/int survive pickle via crash+resume
+8. inspect()              : returns manifest without downloading checkpoint files
 
 Run (local datastore, no cloud needed):
     python test_implicit_checkpoint_flow.py run
@@ -138,8 +139,7 @@ class ImplicitCheckpointTestFlow(FlowSpec):
           → list_name_filter       (scenario 5: list(name=...) filtering)
           → user_metadata          (scenario 6: metadata= round-trip)
           → complex_types          (scenario 7: complex types via crash+resume)
-          → auto_load_resume       (scenario 8: auto_load=True)
-          → inspect_checkpoint     (scenario 9: inspect() without download)
+          → inspect_checkpoint     (scenario 8: inspect() without download)
           → end
     """
 
@@ -425,41 +425,10 @@ class ImplicitCheckpointTestFlow(FlowSpec):
             self.my_int = 42
             current.checkpoint.save()
             raise RuntimeError("[intentional crash for complex types test]")
-        self.next(self.auto_load_resume)
-
-    # ------------------------------------------------------------------
-    # Scenario 8 – auto_load=True eliminates is_loaded/load() boilerplate
-    # ------------------------------------------------------------------
-    @retry(times=1)
-    @checkpoint(load_policy="fresh", auto_load=True)
-    @card(id="checkpoint_dir")
-    @step
-    def auto_load_resume(self):
-        """
-        Attempt 0:
-          - Sets self.counter = 10, saves a checkpoint, then crashes intentionally.
-
-        Attempt 1 (retry):
-          - auto_load=True means the decorator has already called load() before
-            this body runs — no is_loaded / load() boilerplate needed.
-          - Asserts self.counter == 10 to confirm the restore happened.
-        """
-        if current.retry_count == 0:
-            self.counter = 10
-            current.checkpoint.save()
-            raise RuntimeError("[intentional crash for auto_load test]")
-
-        # Attempt 1: checkpoint was already loaded by the decorator.
-        assert self.counter == 10, (
-            "Expected counter=10 after auto_load restore, got %d" % self.counter
-        )
-        self.completed_scenario_8 = True
-        print("--- scenario 8 PASSED ---")
-        _emit_checkpoint_dir_card()
         self.next(self.inspect_checkpoint)
 
     # ------------------------------------------------------------------
-    # Scenario 9 – inspect() returns manifest without downloading files
+    # Scenario 8 – inspect() returns manifest without downloading files
     # ------------------------------------------------------------------
     @checkpoint(
         serialization_config={"weights": "raw"},
@@ -471,7 +440,7 @@ class ImplicitCheckpointTestFlow(FlowSpec):
         """
         Saves one checkpoint then verifies inspect() returns the correct manifest
         via three different reference types (artifact, dict, key string) — all
-        without triggering a full checkpoint download.
+        without triggering a full checkpoint download.  (Scenario 8)
         """
         self.weights = _fake_weights(seed=3)
         self.epoch = 7
@@ -499,8 +468,8 @@ class ImplicitCheckpointTestFlow(FlowSpec):
             "_implicit_manifest must not appear in ref.metadata"
         )
 
-        self.completed_scenario_9 = True
-        print("--- scenario 9 PASSED ---")
+        self.completed_scenario_8 = True
+        print("--- scenario 8 PASSED ---")
         _emit_checkpoint_dir_card()
         self.next(self.end)
 
@@ -517,7 +486,6 @@ class ImplicitCheckpointTestFlow(FlowSpec):
         assert self.completed_scenario_6
         assert self.completed_scenario_7
         assert self.completed_scenario_8
-        assert self.completed_scenario_9
         print("=== All implicit checkpoint scenarios PASSED ===")
 
 

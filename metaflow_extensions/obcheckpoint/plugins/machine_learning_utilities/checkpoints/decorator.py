@@ -477,18 +477,6 @@ class CheckpointDecorator(StepDecorator):
         ``{field_name: format}`` overrides.  Supported formats are
         ``"pickle"`` (default) and ``"raw"`` (for ``bytes``/``bytearray``).
 
-    auto_load : bool, default: False
-        If True, automatically calls ``current.checkpoint.load()`` before the
-        step body runs whenever a checkpoint is detected at task start
-        (i.e. ``is_loaded`` is True).  Equivalent to writing::
-
-            if current.checkpoint.is_loaded:
-                current.checkpoint.load()
-
-        at the top of every step. Combine with ``load_policy="fresh"`` for
-        automatic crash-and-resume on retries, or ``load_policy="eager"`` to
-        warm-start from any prior run.
-
     MF Add To Current
     -----------------
     checkpoint -> metaflow_extensions.obcheckpoint.plugins.machine_learning_utilities.checkpoints.decorator.CurrentCheckpointer
@@ -518,8 +506,6 @@ class CheckpointDecorator(StepDecorator):
         "exclude": None,
         # `serialization_config` is a {field_name: format} dict; format is "pickle" or "raw".
         "serialization_config": None,
-        # `auto_load` automatically calls load() before the step runs if a checkpoint is found.
-        "auto_load": False,
     }
 
     LOAD_POLCIES = [
@@ -679,18 +665,9 @@ class CheckpointDecorator(StepDecorator):
             interval=3,
         )
 
-        auto_load = self.attributes.get("auto_load", False)
-
         def _wrapped_step_func(_collector_thread, *args, **kwargs):
             _collector_thread.start()
             try:
-                if auto_load and self._chkptr.is_loaded:
-                    warning_message(
-                        "auto_load: restoring checkpoint before step runs",
-                        logger=self._logger,
-                        ts=False,
-                    )
-                    self._chkptr.load()
                 return step_func(*args, **kwargs)
             finally:
                 _collector_thread.stop()
