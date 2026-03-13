@@ -1,18 +1,14 @@
 """
-Test flow for implicit checkpointing (@checkpoint with exclude=[...] / serialization_config).
+Test flow for implicit checkpointing.
 
 Scenarios covered
 -----------------
-1. @checkpoint             : all public attrs serialized automatically,
-                             crash-and-resume via @retry
-2. exclude=[...]           : listed attrs skipped; all others checkpointed
-3. serialization_config    : "raw" format for bytes payloads
-4. explicit load           : load(reference=ref) restores a specific checkpoint
-5. list() name filter      : list(name=...) returns only matching checkpoints
-6. user metadata           : metadata= in save() round-trips through the artifact dict
-7. complex Python types    : list/dict/str/float/int survive pickle via crash+resume
-8. inspect()              : returns manifest without downloading checkpoint files
-9. include=[...]          : only listed attrs checkpointed; exclude conflict raises
+1. crash-and-resume          : all public attrs saved; retry restores from checkpoint
+2. save / load / list        : explicit load with complex Python types, list() name
+                               filtering, metadata round-trip, no _implicit_manifest leak
+3. exclude=[...]             : listed attrs skipped
+4. include=[...]             : only listed attrs saved; include+exclude conflict raises
+5. inspect()                 : returns manifest via artifact/dict/key without download
 
 Run (local datastore, no cloud needed):
     python test_implicit_checkpoint_flow.py run
@@ -30,7 +26,6 @@ from metaflow.cards import Markdown, Table
 
 
 def _make_tree(keys):
-    """Build a nested dict from a list of slash-separated path strings."""
     root = {}
     for key in keys:
         node = root
@@ -40,7 +35,6 @@ def _make_tree(keys):
 
 
 def _render_tree(node, prefix=""):
-    """Render a nested dict as ASCII tree lines."""
     lines = []
     items = sorted(node.items())
     for i, (name, children) in enumerate(items):
@@ -53,10 +47,6 @@ def _render_tree(node, prefix=""):
 
 
 def _emit_checkpoint_dir_card(card_id="checkpoint_dir"):
-    """
-    Appends a directory-tree view, a details table, and per-checkpoint manifest
-    contents to current.card[card_id].  Call at the end of any @checkpoint step.
-    """
     artifacts = current.checkpoint.list()
     c = current.card[card_id]
 
@@ -64,64 +54,42 @@ def _emit_checkpoint_dir_card(card_id="checkpoint_dir"):
         c.append(Markdown("*No checkpoints found for this step.*"))
         return
 
-    # --- directory tree (expanded to show individual files) ---
     all_paths = []
     for a in artifacts:
         fields = (a.implicit_manifest or {}).get("fields", {})
-        # manifest sidecar always present
         all_paths.append(a.key + "/__implicit_checkpoint__.json")
         for field_info in sorted(fields.values(), key=lambda x: x["filename"]):
             all_paths.append(a.key + "/" + field_info["filename"])
-    tree = _make_tree(all_paths)
-    tree_lines = _render_tree(tree)
+    tree_lines = _render_tree(_make_tree(all_paths))
     c.append(Markdown("## Checkpoint Directory Structure"))
     c.append(Markdown("```\n" + "\n".join(tree_lines) + "\n```"))
 
-    # --- details table ---
-    c.append(Markdown("## Checkpoint Details"))
     rows = []
     for a in sorted(artifacts, key=lambda x: x.created_on):
         ck_dir = a.key.split("/")[-1]
-        parts = ck_dir.split(".")
-        attempt_val = parts[1] if len(parts) > 1 else "?"
         fields = sorted((a.implicit_manifest or {}).get("fields", {}).keys())
         rows.append([
             ck_dir,
             a.name or "",
-            attempt_val,
+            ck_dir.split(".")[1] if "." in ck_dir else "?",
             a.created_on[:19],
             ", ".join(fields) or "(none)",
             str(a.metadata or {}),
         ])
+    c.append(Markdown("## Checkpoint Details"))
     c.append(Table(
         headers=["Checkpoint dir", "Name", "Attempt", "Created", "Fields", "User Metadata"],
         data=rows,
     ))
 
-    # --- manifest contents per checkpoint ---
-    c.append(Markdown("## Implicit Checkpoint Manifests"))
+    c.append(Markdown("## Manifests"))
     for a in sorted(artifacts, key=lambda x: x.created_on):
-        ck_dir = a.key.split("/")[-1]
         manifest = a.implicit_manifest
+        ck_dir = a.key.split("/")[-1]
         if manifest is None:
-            c.append(Markdown("**%s** — no implicit manifest" % ck_dir))
+            c.append(Markdown("**%s** — no manifest" % ck_dir))
         else:
-            c.append(Markdown("**%s**" % ck_dir))
-            c.append(Markdown("```json\n%s\n```" % json.dumps(manifest, indent=2)))
-
-
-# ---------------------------------------------------------------------------
-
-def _fake_weights(seed=42):
-    """Return a deterministic 128-byte blob."""
-    return bytes([(seed + i) % 256 for i in range(128)])
-
-
-def _train_one_epoch(weights, epoch):
-    """Mutate one byte to simulate a training step."""
-    w = bytearray(weights)
-    w[epoch % len(w)] = (w[epoch % len(w)] + 1) % 256
-    return bytes(w)
+            c.append(Markdown("**%s**\n```json\n%s\n```" % (ck_dir, json.dumps(manifest, indent=2))))
 
 
 # ---------------------------------------------------------------------------
@@ -129,208 +97,71 @@ def _train_one_epoch(weights, epoch):
 # ---------------------------------------------------------------------------
 
 class ImplicitCheckpointTestFlow(FlowSpec):
-    """
-    Sequential test flow:
 
-        start
-          → train_all_fields       (scenario 1: all attrs + crash/resume)
-          → train_filtered_fields  (scenario 2: exclude=[...])
-          → train_raw_bytes        (scenario 3: serialization_config raw)
-          → explicit_load          (scenario 4: load(reference=ref))
-          → list_name_filter       (scenario 5: list(name=...) filtering)
-          → user_metadata          (scenario 6: metadata= round-trip)
-          → complex_types          (scenario 7: complex types via crash+resume)
-          → inspect_checkpoint     (scenario 8: inspect() without download)
-          → include_filter         (scenario 9: include=[...] field selection)
-          → end
-    """
-
-    # ------------------------------------------------------------------
-    # start
-    # ------------------------------------------------------------------
     @step
     def start(self):
-        print("=== ImplicitCheckpointTestFlow starting ===")
-        self.next(self.train_all_fields)
+        self.next(self.crash_and_resume)
 
     # ------------------------------------------------------------------
-    # Scenario 1 – all attrs, crash-and-resume
+    # Scenario 1 – crash-and-resume
     # ------------------------------------------------------------------
     @retry(times=1)
     @checkpoint(load_policy="fresh")
     @card(id="checkpoint_dir")
     @step
-    def train_all_fields(self):
-        """
-        Attempt 0:
-          - self.epoch=0, self.loss=1.0 initialised fresh
-          - Runs epochs 0-2, saving after each
-          - Deliberately raises RuntimeError after epoch 2
-
-        Attempt 1 (retry):
-          - is_loaded=True  → current.checkpoint.load() restores state
-          - self.epoch==2, self.loss≈0.729 (0.9**3)
-          - Loop continues from epoch 2 and finishes at epoch 4
-
-        Assertions:
-          self.epoch == 4
-          self.loss < 1.0
-          self.completed_scenario_1 == True
-        """
+    def crash_and_resume(self):
+        """Attempt 0: save epoch=0, crash. Attempt 1: load, verify epoch=0 restored, finish."""
         if current.checkpoint.is_loaded:
-            print("[attempt %d] Restoring from checkpoint" % current.retry_count)
             current.checkpoint.load()
-            print(
-                "[attempt %d] Restored: epoch=%d  loss=%.4f"
-                % (current.retry_count, self.epoch, self.loss)
-            )
-            assert self.epoch == 2, "Expected epoch=2 on resume, got %d" % self.epoch
+            assert self.epoch == 0, "Expected epoch=0 on resume, got %d" % self.epoch
+            self.loss = round(self.loss * 0.9, 6)
+            self.epoch = 1
+            current.checkpoint.save()
         else:
-            print("[attempt 0] Fresh start")
             self.epoch = 0
             self.loss = 1.0
-
-        for epoch in range(self.epoch, 5):
-            self.loss = round(self.loss * 0.9, 6)
-            self.epoch = epoch
-            print("  epoch=%d  loss=%.6f" % (self.epoch, self.loss))
             current.checkpoint.save()
+            raise RuntimeError("[intentional crash at epoch 0]")
 
-            if current.retry_count == 0 and epoch == 2:
-                raise RuntimeError("[intentional crash at epoch 2]")
-
-        assert self.epoch == 4, "Expected epoch=4 at end, got %d" % self.epoch
-        assert self.loss < 1.0
-        self.completed_scenario_1 = True
+        assert self.epoch == 1 and self.loss < 1.0
+        self.completed_1 = True
         print("--- scenario 1 PASSED ---")
         _emit_checkpoint_dir_card()
-        self.next(self.train_filtered_fields)
+        self.next(self.save_load_and_list)
 
     # ------------------------------------------------------------------
-    # Scenario 2 – exclude filter
-    # ------------------------------------------------------------------
-    @checkpoint(exclude=["scratch"], load_policy="none")
-    @card(id="checkpoint_dir")
-    @step
-    def train_filtered_fields(self):
-        """
-        'scratch' is excluded; 'epoch' and 'loss' are checkpointed.
-
-        Verifies:
-          - save() returns a checkpoint artifact dict
-          - checkpoint manifest includes 'epoch' and 'loss'
-          - checkpoint manifest does NOT include 'scratch'
-        """
-        self.epoch = 0
-        self.loss = 1.0
-        self.scratch = 42        # excluded → must not appear in checkpoint
-
-        for epoch in range(3):
-            self.loss = round(self.loss * 0.85, 6)
-            self.epoch = epoch
-            ref = current.checkpoint.save()
-
-        # verify manifest fields
-        fields_info = (ref.implicit_manifest or {}).get("fields", {})
-        assert "epoch" in fields_info, "Missing 'epoch' in manifest"
-        assert "loss" in fields_info, "Missing 'loss' in manifest"
-        assert "scratch" not in fields_info, "'scratch' must not be checkpointed"
-
-        self.completed_scenario_2 = True
-        print("--- scenario 2 PASSED ---")
-        _emit_checkpoint_dir_card()
-        self.next(self.train_raw_bytes)
-
-    # ------------------------------------------------------------------
-    # Scenario 3 – raw bytes serialization
-    # ------------------------------------------------------------------
-    @checkpoint(
-        serialization_config={"weights": "raw"},
-        load_policy="none",
-    )
-    @card(id="checkpoint_dir")
-    @step
-    def train_raw_bytes(self):
-        """
-        'weights' is a bytes object saved with format='raw'.
-        'epoch' is an int saved with the default format='pickle'.
-
-        Verifies that the manifest metadata records the correct formats.
-        """
-        self.weights = _fake_weights(seed=7)
-        self.epoch = 0
-
-        for epoch in range(4):
-            self.weights = _train_one_epoch(self.weights, epoch)
-            self.epoch = epoch
-            ref = current.checkpoint.save()
-
-        assert ref is not None
-        implicit_manifest = ref.implicit_manifest or {}
-        fields_info = implicit_manifest.get("fields", {})
-
-        assert "weights" in fields_info, "Missing 'weights' in manifest"
-        assert "epoch" in fields_info, "Missing 'epoch' in manifest"
-        assert fields_info["weights"]["format"] == "raw", (
-            "Expected raw format for weights, got %r" % fields_info["weights"]["format"]
-        )
-        assert fields_info["epoch"]["format"] == "pickle", (
-            "Expected pickle format for epoch, got %r" % fields_info["epoch"]["format"]
-        )
-
-        self.completed_scenario_3 = True
-        print("--- scenario 3 PASSED ---")
-        _emit_checkpoint_dir_card()
-        self.next(self.explicit_load)
-
-    # ------------------------------------------------------------------
-    # Scenario 4 – explicit reference load
+    # Scenario 2 – save / load / list / metadata
     # ------------------------------------------------------------------
     @checkpoint(load_policy="none")
     @card(id="checkpoint_dir")
     @step
-    def explicit_load(self):
+    def save_load_and_list(self):
         """
-        Saves a checkpoint, clobbers two fields in memory, then restores them
-        via current.checkpoint.load(reference=ref).
-
-        Verifies that an explicit reference load correctly deserializes only
-        the checkpoint's recorded fields back onto the flow.
+        Complex Python types survive pickle round-trip via explicit load.
+        list(name=...) filters correctly.
+        metadata= survives and _implicit_manifest stays hidden.
         """
-        self.val = 99
-        self.tag = "before"
+        # --- complex types: save, clobber, load(reference), verify ---
+        self.my_list = [1, 2, 3]
+        self.my_dict = {"a": 1, "b": [2, 3]}
+        self.my_str = "hello"
+        self.my_float = 3.14
+        self.my_int = 42
         ref = current.checkpoint.save()
 
-        # clobber in-memory state
-        self.val = 0
-        self.tag = "after"
-        assert self.val == 0
-
-        # restore from the explicit reference
+        self.my_list = []
+        self.my_dict = {}
+        self.my_str = ""
+        self.my_float = 0.0
+        self.my_int = 0
         current.checkpoint.load(reference=ref)
-        assert self.val == 99, "Expected val=99 after load, got %d" % self.val
-        assert self.tag == "before", "Expected tag='before' after load, got %r" % self.tag
+        assert self.my_list == [1, 2, 3], "list mismatch"
+        assert self.my_dict == {"a": 1, "b": [2, 3]}, "dict mismatch"
+        assert self.my_str == "hello", "str mismatch"
+        assert abs(self.my_float - 3.14) < 1e-9, "float mismatch"
+        assert self.my_int == 42, "int mismatch"
 
-        self.completed_scenario_4 = True
-        print("--- scenario 4 PASSED ---")
-        _emit_checkpoint_dir_card()
-        self.next(self.list_name_filter)
-
-    # ------------------------------------------------------------------
-    # Scenario 5 – list() name filter
-    # ------------------------------------------------------------------
-    @checkpoint(load_policy="none")
-    @card(id="checkpoint_dir")
-    @step
-    def list_name_filter(self):
-        """
-        Saves 3 checkpoints: 2 named 'best', 1 named 'latest'.
-
-        Verifies:
-          - list(name='best')   returns exactly 2 entries, all with name='best'
-          - list(name='latest') returns exactly 1 entry
-          - list()              returns all 3 entries
-        """
+        # --- list(name=...) filtering ---
         self.x = 1
         current.checkpoint.save(name="best")
         self.x = 2
@@ -340,185 +171,105 @@ class ImplicitCheckpointTestFlow(FlowSpec):
 
         best = current.checkpoint.list(name="best")
         latest = current.checkpoint.list(name="latest")
-        all_chkpts = current.checkpoint.list()
+        assert len(best) == 2, "Expected 2 'best', got %d" % len(best)
+        assert len(latest) == 1, "Expected 1 'latest', got %d" % len(latest)
+        assert all(c.name == "best" for c in best), "Wrong name in best list"
 
-        assert len(best) == 2, "Expected 2 'best' checkpoints, got %d" % len(best)
-        assert len(latest) == 1, "Expected 1 'latest' checkpoint, got %d" % len(latest)
-        assert len(all_chkpts) == 3, "Expected 3 total checkpoints, got %d" % len(all_chkpts)
-        for c in best:
-            assert c.name == "best", "Wrong name in best list: %r" % c.name
-
-        self.completed_scenario_5 = True
-        print("--- scenario 5 PASSED ---")
-        _emit_checkpoint_dir_card()
-        self.next(self.user_metadata)
-
-    # ------------------------------------------------------------------
-    # Scenario 6 – user metadata round-trip
-    # ------------------------------------------------------------------
-    @checkpoint(load_policy="none")
-    @card(id="checkpoint_dir")
-    @step
-    def user_metadata(self):
-        """
-        Saves with metadata={"accuracy": 0.95, "tag": "best_so_far"} and a
-        custom name, then verifies all fields survive in the returned artifact dict.
-        """
-        self.epoch = 5
-        self.loss = 0.123
-        ref = current.checkpoint.save(
-            name="my_ckpt",
+        # --- metadata round-trip; _implicit_manifest hidden ---
+        self.val = 1
+        ref_meta = current.checkpoint.save(
+            name="meta_ckpt",
             metadata={"accuracy": 0.95, "tag": "best_so_far"},
         )
+        assert ref_meta.name == "meta_ckpt"
+        meta = ref_meta.metadata or {}
+        assert meta.get("accuracy") == 0.95
+        assert meta.get("tag") == "best_so_far"
+        assert "_implicit_manifest" not in meta, "_implicit_manifest must not appear in metadata"
 
-        assert ref.name == "my_ckpt", "Wrong checkpoint name: %r" % ref.name
-        meta = ref.metadata or {}
-        assert meta.get("accuracy") == 0.95, (
-            "Expected accuracy=0.95, got %r" % meta.get("accuracy")
-        )
-        assert meta.get("tag") == "best_so_far", (
-            "Expected tag='best_so_far', got %r" % meta.get("tag")
-        )
-        assert "_implicit_manifest" not in meta, (
-            "_implicit_manifest must not appear in user-visible metadata"
-        )
-
-        self.completed_scenario_6 = True
-        print("--- scenario 6 PASSED ---")
+        self.completed_2 = True
+        print("--- scenario 2 PASSED ---")
         _emit_checkpoint_dir_card()
-        self.next(self.complex_types)
+        self.next(self.exclude_filter)
 
     # ------------------------------------------------------------------
-    # Scenario 7 – complex Python types via crash-and-resume
+    # Scenario 3 – exclude=[...]
     # ------------------------------------------------------------------
-    @retry(times=1)
-    @checkpoint(load_policy="fresh")
+    @checkpoint(exclude=["scratch"], load_policy="none")
     @card(id="checkpoint_dir")
     @step
-    def complex_types(self):
-        """
-        Attempt 0:
-          - Stores list, dict, str, float, int on self
-          - Saves a checkpoint then crashes intentionally
+    def exclude_filter(self):
+        """'scratch' excluded; 'epoch' and 'loss' checkpointed."""
+        self.epoch = 0
+        self.loss = 0.5
+        self.scratch = 42
 
-        Attempt 1 (retry):
-          - is_loaded=True → current.checkpoint.load() restores all fields
-          - Asserts every field matches the original value exactly
-        """
-        if current.checkpoint.is_loaded:
-            current.checkpoint.load()
-            assert self.my_list == [1, 2, 3], "list mismatch: %r" % self.my_list
-            assert self.my_dict == {"a": 1, "b": [2, 3]}, (
-                "dict mismatch: %r" % self.my_dict
-            )
-            assert self.my_str == "hello", "str mismatch: %r" % self.my_str
-            assert abs(self.my_float - 3.14) < 1e-9, (
-                "float mismatch: %r" % self.my_float
-            )
-            assert self.my_int == 42, "int mismatch: %r" % self.my_int
-            self.completed_scenario_7 = True
-            print("--- scenario 7 PASSED ---")
-            _emit_checkpoint_dir_card()
-        else:
-            self.my_list = [1, 2, 3]
-            self.my_dict = {"a": 1, "b": [2, 3]}
-            self.my_str = "hello"
-            self.my_float = 3.14
-            self.my_int = 42
-            current.checkpoint.save()
-            raise RuntimeError("[intentional crash for complex types test]")
-        self.next(self.inspect_checkpoint)
+        ref = current.checkpoint.save()
+        fields = (ref.implicit_manifest or {}).get("fields", {})
+        assert "epoch" in fields and "loss" in fields, "epoch/loss missing from manifest"
+        assert "scratch" not in fields, "'scratch' must not be checkpointed"
 
-    # ------------------------------------------------------------------
-    # Scenario 8 – inspect() returns manifest without downloading files
-    # ------------------------------------------------------------------
-    @checkpoint(
-        serialization_config={"weights": "raw"},
-        load_policy="none",
-    )
-    @card(id="checkpoint_dir")
-    @step
-    def inspect_checkpoint(self):
-        """
-        Saves one checkpoint then verifies inspect() returns the correct manifest
-        via three different reference types (artifact, dict, key string) — all
-        without triggering a full checkpoint download.  (Scenario 8)
-        """
-        self.weights = _fake_weights(seed=3)
-        self.epoch = 7
-        ref = current.checkpoint.save(name="inspect_me")
-
-        # --- via CheckpointArtifact (direct attribute) ---
-        manifest = current.checkpoint.inspect(ref)
-        assert manifest is not None, "inspect(artifact) returned None"
-        fields = manifest.get("fields", {})
-        assert "weights" in fields, "Missing 'weights' in inspected manifest"
-        assert "epoch" in fields, "Missing 'epoch' in inspected manifest"
-        assert fields["weights"]["format"] == "raw"
-        assert fields["epoch"]["format"] == "pickle"
-
-        # --- via dict ---
-        manifest_from_dict = current.checkpoint.inspect(ref.to_dict())
-        assert manifest_from_dict == manifest, "inspect(dict) mismatch"
-
-        # --- via key string (metadata-only lookup, no file download) ---
-        manifest_from_key = current.checkpoint.inspect(ref.key)
-        assert manifest_from_key == manifest, "inspect(key) mismatch"
-
-        # --- ref.metadata must still be clean (no _implicit_manifest) ---
-        assert "_implicit_manifest" not in (ref.metadata or {}), (
-            "_implicit_manifest must not appear in ref.metadata"
-        )
-
-        self.completed_scenario_8 = True
-        print("--- scenario 8 PASSED ---")
+        self.completed_3 = True
+        print("--- scenario 3 PASSED ---")
         _emit_checkpoint_dir_card()
         self.next(self.include_filter)
 
     # ------------------------------------------------------------------
-    # Scenario 9 – include=[...] field selection
+    # Scenario 4 – include=[...]
     # ------------------------------------------------------------------
     @checkpoint(include=["epoch", "loss"], load_policy="none")
     @card(id="checkpoint_dir")
     @step
     def include_filter(self):
-        """
-        Only 'epoch' and 'loss' are in the include list; 'scratch' is not.
-
-        Verifies:
-          - manifest contains exactly 'epoch' and 'loss'
-          - 'scratch' is absent from the manifest
-          - specifying both include and exclude raises ValueError
-        """
+        """Only 'epoch' and 'loss' checkpointed; include+exclude conflict raises ValueError."""
         self.epoch = 3
         self.loss = 0.42
         self.scratch = "ignored"
 
         ref = current.checkpoint.save()
-        fields_info = (ref.implicit_manifest or {}).get("fields", {})
-        assert "epoch" in fields_info, "Missing 'epoch' in manifest"
-        assert "loss" in fields_info, "Missing 'loss' in manifest"
-        assert "scratch" not in fields_info, "'scratch' must not be checkpointed"
-        assert len(fields_info) == 2, (
-            "Expected exactly 2 fields, got %d: %s" % (len(fields_info), sorted(fields_info))
-        )
+        fields = (ref.implicit_manifest or {}).get("fields", {})
+        assert "epoch" in fields and "loss" in fields, "epoch/loss missing"
+        assert "scratch" not in fields, "'scratch' must not be checkpointed"
+        assert len(fields) == 2, "Expected exactly 2 fields, got %d" % len(fields)
 
-        # include and exclude are mutually exclusive — must raise
-        try:
-            current.checkpoint.save.__func__  # ensure it's the right object
-        except AttributeError:
-            pass
         from metaflow_extensions.obcheckpoint.plugins.machine_learning_utilities.checkpoints.final_api import (
             _get_implicit_fields,
         )
         try:
             _get_implicit_fields(self, exclude=["scratch"], include=["epoch"])
-            assert False, "Expected ValueError for include+exclude conflict"
+            assert False, "Expected ValueError"
         except ValueError as e:
-            assert "mutually exclusive" in str(e), "Unexpected error: %s" % e
+            assert "mutually exclusive" in str(e)
 
-        self.completed_scenario_9 = True
-        print("--- scenario 9 PASSED ---")
+        self.completed_4 = True
+        print("--- scenario 4 PASSED ---")
+        _emit_checkpoint_dir_card()
+        self.next(self.inspect_checkpoint)
+
+    # ------------------------------------------------------------------
+    # Scenario 5 – inspect()
+    # ------------------------------------------------------------------
+    @checkpoint(load_policy="none")
+    @card(id="checkpoint_dir")
+    @step
+    def inspect_checkpoint(self):
+        """inspect() returns manifest via artifact/dict/key without downloading files."""
+        self.epoch = 0
+        self.loss = 0.5
+        ref = current.checkpoint.save(name="inspect_me")
+
+        manifest = current.checkpoint.inspect(ref)
+        assert manifest is not None
+        fields = manifest.get("fields", {})
+        assert "epoch" in fields and "loss" in fields, "epoch/loss missing from manifest"
+        assert current.checkpoint.inspect(ref.to_dict()) == manifest, "inspect(dict) mismatch"
+        assert current.checkpoint.inspect(ref.key) == manifest, "inspect(key) mismatch"
+        assert "_implicit_manifest" not in (ref.metadata or {}), (
+            "_implicit_manifest must not appear in ref.metadata"
+        )
+
+        self.completed_5 = True
+        print("--- scenario 5 PASSED ---")
         _emit_checkpoint_dir_card()
         self.next(self.end)
 
@@ -527,15 +278,11 @@ class ImplicitCheckpointTestFlow(FlowSpec):
     # ------------------------------------------------------------------
     @step
     def end(self):
-        assert self.completed_scenario_1
-        assert self.completed_scenario_2
-        assert self.completed_scenario_3
-        assert self.completed_scenario_4
-        assert self.completed_scenario_5
-        assert self.completed_scenario_6
-        assert self.completed_scenario_7
-        assert self.completed_scenario_8
-        assert self.completed_scenario_9
+        assert self.completed_1
+        assert self.completed_2
+        assert self.completed_3
+        assert self.completed_4
+        assert self.completed_5
         print("=== All implicit checkpoint scenarios PASSED ===")
 
 

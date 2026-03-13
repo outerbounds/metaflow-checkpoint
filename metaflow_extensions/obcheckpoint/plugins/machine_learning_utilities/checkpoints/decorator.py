@@ -129,7 +129,6 @@ class CurrentCheckpointer:
         gang_scheduled_task=False,
         exclude=None,
         include=None,
-        serialization_config=None,
         temp_dir_root=None,
     ) -> None:
         from metaflow import current
@@ -158,7 +157,6 @@ class CurrentCheckpointer:
         self._resolved_scope = resolved_scope
         self._exclude = exclude
         self._include = include
-        self._serialization_config = serialization_config or {}
         os.environ[CHECKPOINT_TASK_IDENTIFIER_ENV_VAR_NAME] = self._task_identifier
         os.environ[CHECKPOINT_UID_ENV_VAR_NAME] = str(
             self._default_checkpointer._checkpointer._checkpoint_uid
@@ -233,7 +231,6 @@ class CurrentCheckpointer:
             flow=self._flow,
             exclude=self._exclude,
             include=self._include,
-            serialization_config=self._serialization_config,
             name=name,
             metadata=metadata,
             latest=latest,
@@ -484,10 +481,6 @@ class CheckpointDecorator(StepDecorator):
         time if any name is not present on ``self``.
         Cannot be specified together with ``exclude``.
 
-    serialization_config : dict, default: None
-        ``{field_name: format}`` overrides.  Supported formats are
-        ``"pickle"`` (default) and ``"raw"`` (for ``bytes``/``bytearray``).
-
     MF Add To Current
     -----------------
     checkpoint -> metaflow_extensions.obcheckpoint.plugins.machine_learning_utilities.checkpoints.decorator.CurrentCheckpointer
@@ -517,8 +510,6 @@ class CheckpointDecorator(StepDecorator):
         "exclude": None,
         # `include` checkpoints only the listed field names; mutually exclusive with `exclude`.
         "include": None,
-        # `serialization_config` is a {field_name: format} dict; format is "pickle" or "raw".
-        "serialization_config": None,
     }
 
     LOAD_POLCIES = [
@@ -734,7 +725,6 @@ class CheckpointDecorator(StepDecorator):
             gang_scheduled_task=gang_scheduled_task,
             exclude=self.attributes.get("exclude"),
             include=self.attributes.get("include"),
-            serialization_config=self.attributes.get("serialization_config"),
             temp_dir_root=temp_dir_root,
         )
         return self._chkptr._setup_task_first_load(load_policy, flow)

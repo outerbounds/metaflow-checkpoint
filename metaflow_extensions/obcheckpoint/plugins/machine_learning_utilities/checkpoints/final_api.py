@@ -170,7 +170,6 @@ class Checkpoint:
         flow,
         exclude=None,
         include=None,
-        serialization_config=None,
         name=DEFAULT_NAME,
         metadata={},
         latest=True,
@@ -196,10 +195,6 @@ class Checkpoint:
             name is not present on *flow* at save time.
             Cannot be specified together with ``exclude``.
 
-        serialization_config : dict, optional
-            ``{field_name: format}`` overrides.  Supported formats are
-            ``"pickle"`` (default) and ``"raw"`` (for ``bytes``/``bytearray``).
-
         name : str, default: "mfchckpt"
             The name of the checkpoint.
 
@@ -216,7 +211,6 @@ class Checkpoint:
         if self._checkpointer is None:
             self = self._init_checkpoint_for_writes(self)
 
-        serialization_config = serialization_config or {}
         field_items = _get_implicit_fields(flow, exclude=exclude, include=include)
 
         if not field_items:
@@ -230,13 +224,11 @@ class Checkpoint:
 
         with tempfile.TemporaryDirectory(prefix="mf_implicit_save_", dir=temp_dir_root) as tmp_dir:
             for field_name, value in field_items:
-                fmt = serialization_config.get(field_name, PICKLE_FORMAT)
-                data = _serialize_value(value, fmt)
-                ext = ".bin" if fmt == RAW_FORMAT else ".pkl"
-                filename = field_name + ext
+                data = _serialize_value(value, PICKLE_FORMAT)
+                filename = field_name + ".pkl"
                 with open(os.path.join(tmp_dir, filename), "wb") as f:
                     f.write(data)
-                field_manifest[field_name] = {"format": fmt, "filename": filename}
+                field_manifest[field_name] = {"format": PICKLE_FORMAT, "filename": filename}
 
             manifest_payload = {"version": 1, "fields": field_manifest}
             with open(os.path.join(tmp_dir, IMPLICIT_MANIFEST_FILENAME), "w") as f:
