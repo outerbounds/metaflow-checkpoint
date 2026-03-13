@@ -112,7 +112,8 @@ def _extract_task_object(
     if isinstance(task, str):
         if attempt is not None:
             task = Task(task, attempt=_attempt, _namespace_check=False)
-        task = Task(task, _namespace_check=False)
+        else:
+            task = Task(task, _namespace_check=False)
     elif isinstance(task, Task) and attempt is not None:
         task = Task(task.pathspec, attempt=_attempt, _namespace_check=False)
     return task

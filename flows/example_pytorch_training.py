@@ -14,8 +14,8 @@ Demonstrates the core patterns for using @checkpoint in a real training loop:
     let downstream steps or external tooling retrieve a specific model version
 
 Run:
-    python flows/example_pytorch_training.py run
-    python flows/example_pytorch_training.py run --epochs 50 --lr 1e-2
+    PYTHONPATH=. python ./flows/example_pytorch_training.py run --with kubernetes
+    PYTHONPATH=. python flows/example_pytorch_training.py run --epochs 50 --lr 1e-2
 """
 
 import json
@@ -23,7 +23,7 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(__file__))
 
-from metaflow import FlowSpec, Parameter, checkpoint, current, image, retry, step, gpu, T4
+from metaflow import FlowSpec, Parameter, Task, checkpoint, current, image, retry, step, gpu, T4
 
 
 class CheckpointedPyTorchTrainingFlow(FlowSpec):
@@ -47,7 +47,7 @@ class CheckpointedPyTorchTrainingFlow(FlowSpec):
     def start(self):
         self.next(self.train)
 
-    @retry(times=4)
+    @retry(times=4, minutes_between_retries=0.1)
     @checkpoint(
         load_policy="fresh",
         # Only checkpoint the fields that define training state.
@@ -196,21 +196,38 @@ class CheckpointedPyTorchTrainingFlow(FlowSpec):
 
         self.final_train_loss = self.train_loss
         self.final_val_loss = self.val_loss
+        self.train_task_pathspec = current.pathspec # FlowName/RunID/train/TaskID
         self.next(self.inspect_checkpoints)
 
     @checkpoint(load_policy="none")
     @step
     def inspect_checkpoints(self):
-        """Print a summary of all checkpoints saved during training."""
-        artifacts = current.checkpoint.list()
-        print("\n=== Checkpoints saved (%d total) ===" % len(artifacts))
-        for a in sorted(artifacts, key=lambda x: x.created_on):
-            fields = sorted((a.implicit_manifest or {}).get("fields", {}).keys())
-            meta = {k: v for k, v in (a.metadata or {}).items() if not k.startswith("_")}
-            print(
-                "  [%s] attempt=%s  name=%-8s  fields=[%s]  metadata=%s"
-                % (a.created_on[:19], a.attempt, a.name or "(none)", ", ".join(fields), json.dumps(meta))
-            )
+        """Print a summary of all checkpoints saved during training, grouped by attempt."""
+        # This is all a bit hacky - will add some APIs to make this kind of querying easier.
+        train_task = Task(self.train_task_pathspec, _namespace_check=False)
+        max_attempt = train_task.current_attempt
+        artifacts = []
+        for attempt in range(max_attempt + 1):
+            artifacts.extend(current.checkpoint.list(task=self.train_task_pathspec, attempt=attempt))
+        artifacts.sort(key=lambda x: (x.attempt, x.created_on))
+
+        # Group by attempt
+        by_attempt = {}
+        for a in artifacts:
+            by_attempt.setdefault(a.attempt, []).append(a)
+
+        total = len(artifacts)
+        print("\n=== Checkpoints saved (%d total across %d attempt(s)) ===" % (total, len(by_attempt)))
+        for attempt, ckpts in sorted(by_attempt.items()):
+            print("\n  Attempt %d  (%d checkpoint(s))" % (attempt, len(ckpts)))
+            print("  " + "-" * 60)
+            for a in ckpts:
+                meta = {k: v for k, v in (a.metadata or {}).items() if not k.startswith("_")}
+                print("    [%s]  name=%-8s  %s" % (
+                    a.created_on[:19],
+                    a.name or "(none)",
+                    "  ".join("%s=%s" % (k, v) for k, v in sorted(meta.items())),
+                ))
         self.next(self.end)
 
     @step
