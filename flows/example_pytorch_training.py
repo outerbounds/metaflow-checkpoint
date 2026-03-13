@@ -18,7 +18,6 @@ Run:
     PYTHONPATH=. python flows/example_pytorch_training.py run --epochs 50 --lr 1e-2
 """
 
-import json
 import sys
 import os
 sys.path.insert(0, os.path.dirname(__file__))
@@ -36,7 +35,7 @@ class CheckpointedPyTorchTrainingFlow(FlowSpec):
     continues from the saved epoch rather than epoch 0.
     """
 
-    epochs = Parameter("epochs", default=5, type=int, help="Total training epochs")
+    epochs = Parameter("epochs", default=10, type=int, help="Total training epochs")
     lr = Parameter("lr", default=1e-3, type=float, help="Adam learning rate")
     batch_size = Parameter("batch_size", default=128, type=int, help="Mini-batch size")
     save_every = Parameter(

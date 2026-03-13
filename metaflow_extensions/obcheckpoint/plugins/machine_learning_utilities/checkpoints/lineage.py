@@ -64,4 +64,4 @@ def trace_lineage(flow, checkpoint: CheckpointArtifact):
 
         return _loaded_parent_key(data, _flow, parents=parents, max_depth=max_depth)
 
-    return _loaded_parent_key(checkpoint, flow, parents=[])
+    return _loaded_parent_key(checkpoint, flow, parents=[]) + [checkpoint]
