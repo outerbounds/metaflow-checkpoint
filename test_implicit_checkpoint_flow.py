@@ -100,7 +100,13 @@ class ImplicitCheckpointTestFlow(FlowSpec):
 
     @step
     def start(self):
-        self.next(self.crash_and_resume)
+        self.next(
+            self.crash_and_resume,
+            self.save_load_and_list,
+            self.exclude_filter,
+            self.include_filter,
+            self.inspect_checkpoint,
+        )
 
     # ------------------------------------------------------------------
     # Scenario 1 – crash-and-resume
@@ -127,7 +133,7 @@ class ImplicitCheckpointTestFlow(FlowSpec):
         self.completed_1 = True
         print("--- scenario 1 PASSED ---")
         _emit_checkpoint_dir_card()
-        self.next(self.save_load_and_list)
+        self.next(self.join)
 
     # ------------------------------------------------------------------
     # Scenario 2 – save / load / list / metadata
@@ -190,7 +196,7 @@ class ImplicitCheckpointTestFlow(FlowSpec):
         self.completed_2 = True
         print("--- scenario 2 PASSED ---")
         _emit_checkpoint_dir_card()
-        self.next(self.exclude_filter)
+        self.next(self.join)
 
     # ------------------------------------------------------------------
     # Scenario 3 – exclude=[...]
@@ -212,7 +218,7 @@ class ImplicitCheckpointTestFlow(FlowSpec):
         self.completed_3 = True
         print("--- scenario 3 PASSED ---")
         _emit_checkpoint_dir_card()
-        self.next(self.include_filter)
+        self.next(self.join)
 
     # ------------------------------------------------------------------
     # Scenario 4 – include=[...]
@@ -244,7 +250,7 @@ class ImplicitCheckpointTestFlow(FlowSpec):
         self.completed_4 = True
         print("--- scenario 4 PASSED ---")
         _emit_checkpoint_dir_card()
-        self.next(self.inspect_checkpoint)
+        self.next(self.join)
 
     # ------------------------------------------------------------------
     # Scenario 5 – inspect()
@@ -271,6 +277,18 @@ class ImplicitCheckpointTestFlow(FlowSpec):
         self.completed_5 = True
         print("--- scenario 5 PASSED ---")
         _emit_checkpoint_dir_card()
+        self.next(self.join)
+
+    # ------------------------------------------------------------------
+    # join
+    # ------------------------------------------------------------------
+    @step
+    def join(self, inputs):
+        assert inputs.crash_and_resume.completed_1
+        assert inputs.save_load_and_list.completed_2
+        assert inputs.exclude_filter.completed_3
+        assert inputs.include_filter.completed_4
+        assert inputs.inspect_checkpoint.completed_5
         self.next(self.end)
 
     # ------------------------------------------------------------------
@@ -278,11 +296,6 @@ class ImplicitCheckpointTestFlow(FlowSpec):
     # ------------------------------------------------------------------
     @step
     def end(self):
-        assert self.completed_1
-        assert self.completed_2
-        assert self.completed_3
-        assert self.completed_4
-        assert self.completed_5
         print("=== All implicit checkpoint scenarios PASSED ===")
 
 
