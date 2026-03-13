@@ -18,13 +18,12 @@ Run:
     python flows/example_pytorch_training.py run --epochs 50 --lr 1e-2
 """
 
+import json
 import sys
 import os
 sys.path.insert(0, os.path.dirname(__file__))
 
-from metaflow import FlowSpec, Parameter, card, checkpoint, current, image, retry, step, gpu, T4
-
-from checkpoint_card import emit_checkpoint_dir_card
+from metaflow import FlowSpec, Parameter, checkpoint, current, image, retry, step, gpu, T4
 
 
 class CheckpointedPyTorchTrainingFlow(FlowSpec):
@@ -48,14 +47,13 @@ class CheckpointedPyTorchTrainingFlow(FlowSpec):
     def start(self):
         self.next(self.train)
 
-    @retry(times=2)
+    @retry(times=4)
     @checkpoint(
         load_policy="fresh",
         # Only checkpoint the fields that define training state.
         # Flow-level artifacts (e.g. final_* set after the loop) are excluded.
-        include=["epoch", "best_loss", "model_state", "optimizer_state"],
+        include=["epoch", "best_loss", "train_loss", "val_loss", "model_state", "optimizer_state"],
     )
-    @card(id="checkpoint_dir")
     @image(
         base_image="pytorch/pytorch:2.1.0-cuda11.8-cudnn8-runtime",
         python_packages=["torchvision"],
@@ -76,6 +74,7 @@ class CheckpointedPyTorchTrainingFlow(FlowSpec):
             self.optimizer_state, and self.best_loss from the latest checkpoint
           - the loop resumes from self.epoch + 1
         """
+        import random
         import torch
         import torch.nn as nn
         import torch.optim as optim
@@ -132,11 +131,14 @@ class CheckpointedPyTorchTrainingFlow(FlowSpec):
             )
         else:
             self.best_loss = float("inf")
+            self.train_loss = 0.0
+            self.val_loss = 0.0
 
         # ------------------------------------------------------------------
         # Training loop
         # ------------------------------------------------------------------
-        train_loss = val_loss = 0.0
+        train_loss = self.train_loss
+        val_loss = self.val_loss
 
         for epoch in range(start_epoch, self.epochs):
 
@@ -166,8 +168,14 @@ class CheckpointedPyTorchTrainingFlow(FlowSpec):
 
             # Snapshot training state so the checkpoint captures the latest values
             self.epoch = epoch
+            self.train_loss = train_loss
+            self.val_loss = val_loss
             self.model_state = model.state_dict()
             self.optimizer_state = optimizer.state_dict()
+
+            # --- random failure to exercise retry/resume ---
+            if random.random() < 0.2:
+                raise RuntimeError("[simulated failure at epoch %d]" % epoch)
 
             # --- periodic checkpoint ---
             if (epoch + 1) % self.save_every == 0:
@@ -186,9 +194,23 @@ class CheckpointedPyTorchTrainingFlow(FlowSpec):
                 )
                 print("  → best checkpoint saved (val_loss=%.4f)" % val_loss)
 
-        self.final_train_loss = train_loss
-        self.final_val_loss = val_loss
-        emit_checkpoint_dir_card()
+        self.final_train_loss = self.train_loss
+        self.final_val_loss = self.val_loss
+        self.next(self.inspect_checkpoints)
+
+    @checkpoint(load_policy="none")
+    @step
+    def inspect_checkpoints(self):
+        """Print a summary of all checkpoints saved during training."""
+        artifacts = current.checkpoint.list()
+        print("\n=== Checkpoints saved (%d total) ===" % len(artifacts))
+        for a in sorted(artifacts, key=lambda x: x.created_on):
+            fields = sorted((a.implicit_manifest or {}).get("fields", {}).keys())
+            meta = {k: v for k, v in (a.metadata or {}).items() if not k.startswith("_")}
+            print(
+                "  [%s] attempt=%s  name=%-8s  fields=[%s]  metadata=%s"
+                % (a.created_on[:19], a.attempt, a.name or "(none)", ", ".join(fields), json.dumps(meta))
+            )
         self.next(self.end)
 
     @step
