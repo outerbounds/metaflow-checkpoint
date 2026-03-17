@@ -64,4 +64,6 @@ def trace_lineage(flow, checkpoint: CheckpointArtifact):
 
         return _loaded_parent_key(data, _flow, parents=parents, max_depth=max_depth)
 
+    # Append the directly loaded checkpoint at the end so index 0 is the oldest ancestor
+    # and the last entry is the checkpoint that was actually loaded for this attempt.
     return _loaded_parent_key(checkpoint, flow, parents=[]) + [checkpoint]

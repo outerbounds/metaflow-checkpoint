@@ -300,6 +300,7 @@ class CheckpointListRefresher(CardRefresher):
         return x
 
     def _footer_components(self):
+        # Show placeholder text when lineage is empty rather than rendering a header-only empty table.
         lineage_table = construct_lineage_table(self._lineage_stack)
         if lineage_table is None:
             return [
@@ -316,6 +317,7 @@ class CheckpointListRefresher(CardRefresher):
     def first_time_render(self, current_card, data_object, force_refresh=False):
         current_card.clear()
         current_card.extend(self._header_components())
+        # Sort checkpoints by creation time so the table is always in chronological order.
         data_object = sorted(data_object, key=lambda x: x["created_on"])
         keys_going_in_table = self._make_table_objects(data_object)
         if len(keys_going_in_table) == 0:
@@ -406,6 +408,7 @@ class CheckpointsCollector(Thread):
         self._refresher = refresher
 
     def collect(self):
+        # list() now returns CheckpointArtifact objects, so convert to dicts for the card renderer.
         return [
             c.to_dict()
             for c in self.current.checkpoint.list(attempt=self.current.retry_count)

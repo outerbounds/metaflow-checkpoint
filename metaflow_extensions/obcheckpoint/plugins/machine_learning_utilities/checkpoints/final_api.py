@@ -27,6 +27,7 @@ if TYPE_CHECKING:
 # Implicit serialization helpers
 # ---------------------------------------------------------------------------
 
+# Manifest file written alongside serialized field files so load() knows what to restore.
 IMPLICIT_MANIFEST_FILENAME = "__implicit_checkpoint__.json"
 
 PICKLE_FORMAT = "pickle"
@@ -113,6 +114,7 @@ def _extract_task_object(
         if attempt is not None:
             task = Task(task, attempt=_attempt, _namespace_check=False)
         else:
+            # else prevents Task(task) receiving a Task object instead of a string when attempt is set.
             task = Task(task, _namespace_check=False)
     elif isinstance(task, Task) and attempt is not None:
         task = Task(task.pathspec, attempt=_attempt, _namespace_check=False)
@@ -151,6 +153,7 @@ class Checkpoint:
     _checkpointer: "Checkpointer" = None
 
     def __init__(self, temp_dir_root=None):
+        # init_dir removed: temp directories are now created per-operation in save()/load().
         self._temp_dir_root = temp_dir_root
         self._checkpoint_dir = None
 

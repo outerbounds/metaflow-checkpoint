@@ -109,10 +109,6 @@ class CurrentCheckpointer:
         return self._task_identifier
 
     @property
-    def directory(self):
-        return None
-
-    @property
     def is_loaded(self):
         return self._loaded_checkpoint is not None
 
@@ -127,8 +123,8 @@ class CurrentCheckpointer:
         resolved_scope,
         logger,
         gang_scheduled_task=False,
-        exclude=None,
-        include=None,
+        exclude=None,  # Field names to skip when checkpointing; forwarded to each save() call.
+        include=None,  # Explicit field names to checkpoint; forwarded to each save() call.
         temp_dir_root=None,
     ) -> None:
         from metaflow import current
@@ -153,8 +149,6 @@ class CurrentCheckpointer:
             gang_scheduled_task=gang_scheduled_task,
         )
         self._flow = flow
-        self._flow_name = flow.name
-        self._resolved_scope = resolved_scope
         self._exclude = exclude
         self._include = include
         os.environ[CHECKPOINT_TASK_IDENTIFIER_ENV_VAR_NAME] = self._task_identifier
@@ -177,6 +171,8 @@ class CurrentCheckpointer:
         if checkpoint is None:
             return None
 
+        # Detection and loading are now separate steps; the checkpoint is stored here but only
+        # downloaded when the user explicitly calls current.checkpoint.load().
         warning_message(
             "Found checkpoint at task start (call current.checkpoint.load() to restore):\n\t[pathspec] %s\n\t[key] %s\n\t[created on] %s\n\t[url] %s"
             % (
@@ -295,6 +291,7 @@ class CurrentCheckpointer:
         -------
         List[CheckpointArtifact]
         """
+        # as_dict=False returns typed CheckpointArtifact objects instead of raw dicts.
         return self._default_checkpointer.list(
             name=name,
             task=task,
@@ -331,13 +328,9 @@ class CurrentCheckpointer:
             reference = self._loaded_checkpoint
         return Checkpoint.inspect(reference)
 
-    def cleanup(self):
-        pass
-
     def load(
         self,
         reference: Optional[Union[str, Dict, CheckpointArtifact]] = None,
-        path=None,
     ):
         """
         Loads a checkpoint and deserializes its fields back onto the flow.
@@ -354,6 +347,7 @@ class CurrentCheckpointer:
             - dict: a dictionary form of a CheckpointArtifact.
             - CheckpointArtifact: a CheckpointArtifact reference.
         """
+        # Default to the checkpoint detected at task start so callers don't need to pass it explicitly.
         if reference is None:
             if not self.is_loaded:
                 raise CheckpointException(
@@ -566,7 +560,6 @@ class CheckpointDecorator(StepDecorator):
 
         if self._chkptr is not None:
             _store_checkpoint_ref_as_data_artifact(flow, retry_count, self._chkptr)
-            self._chkptr.cleanup()
             self._chkptr = None
 
     def task_pre_step(
@@ -687,7 +680,6 @@ class CheckpointDecorator(StepDecorator):
 
         if self._chkptr is not None:
             _store_checkpoint_ref_as_data_artifact(flow, retry_count, self._chkptr)
-            self._chkptr.cleanup()
             self._chkptr = None
 
     def _resolve_scope(self):

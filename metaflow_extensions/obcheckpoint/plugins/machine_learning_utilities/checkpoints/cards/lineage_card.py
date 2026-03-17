@@ -33,8 +33,10 @@ def null_card(load_policy):
 
 # Function to create a lineage table
 def construct_lineage_table(lineage):
+    # Return None for empty lineage so callers can render a placeholder instead of a header-only empty table.
     if not lineage:
         return None
+    # Added "Attempt" column so each row shows which retry the checkpoint was saved in.
     headers = ["Index", "Attempt", "Pathspec", "Created On", "Name", "metadata"]
     rows = []
     for idx, checkpoint in enumerate(lineage):
