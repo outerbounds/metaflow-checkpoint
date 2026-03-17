@@ -1,5 +1,8 @@
-from typing import Iterable, Union, List, Dict, Any, Tuple, Optional, TYPE_CHECKING
+import json
+import os
+import pickle
 import tempfile
+from typing import Iterable, Union, List, Dict, Any, Tuple, Optional, TYPE_CHECKING
 from ..datastructures import CheckpointArtifact
 from .checkpoint_storage import _search_checkpoints_in_metadata_store
 from .constants import (
@@ -20,6 +23,82 @@ if TYPE_CHECKING:
     import metaflow
     from .core import Checkpointer
 
+# ---------------------------------------------------------------------------
+# Implicit serialization helpers
+# ---------------------------------------------------------------------------
+
+# Manifest file written alongside serialized field files so load() knows what to restore.
+IMPLICIT_MANIFEST_FILENAME = "__implicit_checkpoint__.json"
+
+PICKLE_FORMAT = "pickle"
+RAW_FORMAT = "raw"
+_SUPPORTED_FORMATS = (PICKLE_FORMAT, RAW_FORMAT)
+
+
+def _get_implicit_fields(flow, exclude=None, include=None) -> List[Tuple[str, Any]]:
+    """Return list of (field_name, value) to checkpoint.
+
+    ``include`` and ``exclude`` are mutually exclusive (matching the behaviour
+    of Metaflow's ``merge_artifacts``).  If ``include`` is given, only those
+    fields are returned and a ``ValueError`` is raised for any name not present
+    on *flow*.  If ``exclude`` is given, all public fields except the listed
+    names are returned.
+    """
+    if include and exclude:
+        raise ValueError("`include` and `exclude` are mutually exclusive in @checkpoint")
+
+    all_public = [
+        (name, value)
+        for name, value in flow.__dict__.items()
+        if not name.startswith("_") and not callable(value)
+    ]
+
+    if include:
+        include_set = set(include)
+        available = {name for name, _ in all_public}
+        missing = include_set - available
+        if missing:
+            raise ValueError(
+                "Fields specified in `include` not found on self: %s"
+                % sorted(missing)
+            )
+        return [(name, value) for name, value in all_public if name in include_set]
+
+    exclude_set = set(exclude or [])
+    return [(name, value) for name, value in all_public if name not in exclude_set]
+
+
+def _serialize_value(value, fmt) -> bytes:
+    """Serialize *value* to bytes using *fmt*."""
+    if fmt == PICKLE_FORMAT:
+        return pickle.dumps(value)
+    elif fmt == RAW_FORMAT:
+        if not isinstance(value, (bytes, bytearray)):
+            raise TypeError(
+                "Field with serialization format 'raw' must be bytes or bytearray, "
+                "got %s. Use the default 'pickle' format for other types."
+                % type(value).__name__
+            )
+        return bytes(value)
+    else:
+        raise ValueError(
+            "Unsupported serialization format %r. Supported formats: %s"
+            % (fmt, _SUPPORTED_FORMATS)
+        )
+
+
+def _deserialize_value(data, fmt) -> Any:
+    """Deserialize bytes produced by ``_serialize_value`` back to a Python object."""
+    if fmt == PICKLE_FORMAT:
+        return pickle.loads(data)
+    elif fmt == RAW_FORMAT:
+        return data
+    else:
+        raise ValueError("Unsupported serialization format %r." % fmt)
+
+
+# ---------------------------------------------------------------------------
+
 
 def _extract_task_object(
     task: Union["metaflow.Task", str], attempt: Optional[Union[int, str]] = None
@@ -34,7 +113,9 @@ def _extract_task_object(
     if isinstance(task, str):
         if attempt is not None:
             task = Task(task, attempt=_attempt, _namespace_check=False)
-        task = Task(task, _namespace_check=False)
+        else:
+            # else prevents Task(task) receiving a Task object instead of a string when attempt is set.
+            task = Task(task, _namespace_check=False)
     elif isinstance(task, Task) and attempt is not None:
         task = Task(task.pathspec, attempt=_attempt, _namespace_check=False)
     return task
@@ -71,11 +152,10 @@ class Checkpoint:
 
     _checkpointer: "Checkpointer" = None
 
-    def __init__(self, temp_dir_root=None, init_dir=False):
+    def __init__(self, temp_dir_root=None):
+        # init_dir removed: temp directories are now created per-operation in save()/load().
         self._temp_dir_root = temp_dir_root
         self._checkpoint_dir = None
-        if init_dir:
-            self._checkpoint_dir = tempfile.TemporaryDirectory(dir=self._temp_dir_root)
 
     @property
     def directory(self) -> Optional[str]:
@@ -91,62 +171,81 @@ class Checkpoint:
 
     def save(
         self,
-        path=None,
-        metadata=None,
-        latest=True,
+        flow,
+        exclude=None,
+        include=None,
         name=DEFAULT_NAME,
+        metadata={},
+        latest=True,
         storage_format=DEFAULT_STORAGE_FORMAT,
-    ) -> Dict:
+        temp_dir_root=None,
+    ) -> CheckpointArtifact:
         """
-        Saves the checkpoint to the datastore
+        Serializes public attributes of *flow* into a checkpoint.
 
         Parameters
         ----------
-        path : Optional[Union[str, os.PathLike]], default: None
-            The path to save the checkpoint. Accepts a file path or a directory path.
-                - If a directory path is provided, all the contents within that directory will be saved.
-                When a checkpoint is reloaded during task retries, `the current.checkpoint.directory` will
-                contain the contents of this directory.
-                - If a file path is provided, the file will be directly saved to the datastore (with the same filename).
-                When the checkpoint is reloaded during task retries, the file with the same name will be available in the
-                `current.checkpoint.directory`.
-                - If no path is provided then the `Checkpoint.directory` will be saved as the checkpoint.
+        flow : FlowSpec
+            The Metaflow step's ``self`` — source of attribute values.
 
-        name : Optional[str], default: "mfchckpt"
+        exclude : list of str, optional
+            Attribute names to skip.  All other public non-underscore,
+            non-callable attributes on ``flow.__dict__`` are checkpointed.
+            Cannot be specified together with ``include``.
+
+        include : list of str, optional
+            Explicit list of attribute names to checkpoint.  Only these fields
+            are saved; all others are ignored.  Raises ``ValueError`` if any
+            name is not present on *flow* at save time.
+            Cannot be specified together with ``exclude``.
+
+        name : str, default: "mfchckpt"
             The name of the checkpoint.
 
-        metadata : Optional[Dict], default: {}
-            Any metadata that needs to be saved with the checkpoint.
+        metadata : dict, default: {}
+            User metadata to attach to the checkpoint.
 
         latest : bool, default: True
-            If True, the checkpoint will be marked as the latest checkpoint.
-            This helps determine if the checkpoint gets loaded when the task restarts.
+            Mark this checkpoint as the latest.
 
         storage_format : str, default: files
-            If `tar`, the contents of the directory will be tarred before saving to the datastore.
-            If `files`, saves directory directly to the datastore.
+            If ``tar``, the checkpoint directory is tarred before uploading.
+            If ``files``, files are uploaded directly.
         """
-        if path is None and self.directory is None:
-            raise ValueError(
-                "`path` cannot be None when the Checkpoint object is not instantiated with a context manager. "
-            )
-        if path is None:
-            path = self.directory
         if self._checkpointer is None:
-            # If the `Checkpoint` object is being used by `CurrentCheckpointer` then we have already set the `_checkpointer`
-            # attribute. If it is not being set by `CurrentCheckpointer` then the user might be calling it in an outside
-            # process or within main process. So we try to instantiate it for writes.
             self = self._init_checkpoint_for_writes(self)
 
-        if metadata is None:
-            metadata = {}
-        return self._checkpointer.save(
-            path=path,
-            name=name,
-            metadata=metadata,
-            latest=latest,
-            storage_format=storage_format,
-        ).to_dict()
+        field_items = _get_implicit_fields(flow, exclude=exclude, include=include)
+
+        if not field_items:
+            raise ValueError(
+                "No fields found to checkpoint. Use `include=[...]` to specify "
+                "which fields to save, `exclude=[...]` to skip specific fields, "
+                "or set public attributes on self before calling current.checkpoint.save()."
+            )
+
+        field_manifest = {}
+
+        with tempfile.TemporaryDirectory(prefix="mf_implicit_save_", dir=temp_dir_root) as tmp_dir:
+            for field_name, value in field_items:
+                data = _serialize_value(value, PICKLE_FORMAT)
+                filename = field_name + ".pkl"
+                with open(os.path.join(tmp_dir, filename), "wb") as f:
+                    f.write(data)
+                field_manifest[field_name] = {"format": PICKLE_FORMAT, "filename": filename}
+
+            manifest_payload = {"version": 1, "fields": field_manifest}
+            with open(os.path.join(tmp_dir, IMPLICIT_MANIFEST_FILENAME), "w") as f:
+                json.dump(manifest_payload, f, indent=2)
+
+            return self._checkpointer.save(
+                path=tmp_dir,
+                name=name,
+                metadata=dict(metadata),
+                internal_metadata=manifest_payload,
+                latest=latest,
+                storage_format=storage_format,
+            )
 
     @classmethod
     def _init_checkpoint_for_writes(cls, self):
@@ -163,11 +262,6 @@ class Checkpoint:
                 )
             )
         return self
-
-    def generate_key(self, name: str, version_id: int = None):
-        if self._checkpointer is None:
-            self = self._init_checkpoint_for_writes(self)
-        return self._checkpointer.artifact_id(name, version_id)
 
     def __enter__(self):
         if self._checkpoint_dir is None:
@@ -353,30 +447,86 @@ class Checkpoint:
     def load(
         self,
         reference: Union[str, Dict, CheckpointArtifact],
-        path: Optional[str] = None,
+        flow,
+        temp_dir_root=None,
     ):
         """
-        loads a checkpoint reference from the datastore. (resembles a read op)
+        Loads a checkpoint and deserializes its fields back onto *flow*.
+
+        Downloads the checkpoint identified by *reference* to a temporary
+        directory, reads the ``__implicit_checkpoint__.json`` manifest, and
+        calls ``setattr(flow, field_name, value)`` for each recorded field.
 
         Parameters
         ----------
+        reference : str, dict, or CheckpointArtifact
+            The checkpoint to load — a key string, artifact dict, or
+            CheckpointArtifact object.
 
-        `reference` :
-            - can be a string, dict or a CheckpointArtifact object:
-                - string: a string reference to the checkpoint (checkpoint key)
-                - dict: a dictionary reference to the checkpoint
-                - CheckpointArtifact: a CheckpointArtifact object reference to the checkpoint
+        flow : FlowSpec
+            The Metaflow step's ``self`` — destination for deserialized values.
         """
-        if path is None and self.directory is None:
-            raise ValueError(
-                "`path` cannot be None when the Checkpoint object is not instantiated with a context manager. "
-            )
-        if path is None:
-            path = self.directory
+        with tempfile.TemporaryDirectory(prefix="mf_implicit_load_", dir=temp_dir_root) as tmp_dir:
+            load_checkpoint(checkpoint=reference, local_path=tmp_dir)
 
-        load_checkpoint(
-            checkpoint=reference,
-            local_path=path,
+            manifest_path = os.path.join(tmp_dir, IMPLICIT_MANIFEST_FILENAME)
+            if not os.path.exists(manifest_path):
+                raise CheckpointException(
+                    "Checkpoint does not contain an implicit manifest (%s). "
+                    "This checkpoint was not saved in implicit mode."
+                    % IMPLICIT_MANIFEST_FILENAME
+                )
+
+            with open(manifest_path, "r") as f:
+                manifest_payload = json.load(f)
+
+            fields_info = manifest_payload.get("fields", {})
+            for field_name, field_info in fields_info.items():
+                fmt = field_info["format"]
+                filename = field_info["filename"]
+                filepath = os.path.join(tmp_dir, filename)
+                if not os.path.exists(filepath):
+                    raise CheckpointException(
+                        "Field file %r missing from checkpoint directory." % filename
+                    )
+                with open(filepath, "rb") as f:
+                    data = f.read()
+                value = _deserialize_value(data, fmt)
+                setattr(flow, field_name, value)
+
+    @staticmethod
+    def inspect(
+        reference: Union[str, Dict, CheckpointArtifact],
+    ) -> Optional[Dict]:
+        """
+        Returns the implicit checkpoint manifest without downloading checkpoint files.
+
+        Reads field names, formats, and filenames from the stored metadata record
+        rather than downloading the checkpoint, making this a fast metadata-only
+        operation suitable for inspecting large checkpoints.
+
+        Parameters
+        ----------
+        reference : str, dict, or CheckpointArtifact
+            The checkpoint to inspect — a key string, artifact dict, or
+            CheckpointArtifact object.
+
+        Returns
+        -------
+        dict or None
+            The implicit manifest (``{"version": 1, "fields": {...}}``), or
+            ``None`` if the checkpoint was not saved in implicit mode.
+        """
+        if isinstance(reference, CheckpointArtifact):
+            return reference.implicit_manifest
+        if isinstance(reference, dict):
+            return CheckpointArtifact.hydrate(reference).implicit_manifest
+        if isinstance(reference, str):
+            art = CheckpointArtifact._load_metadata_from_key(reference, None)
+            return art.implicit_manifest
+        raise ValueError(
+            "reference must be a CheckpointArtifact, dict, or key string, got %r"
+            % type(reference)
         )
 
     def _search(

@@ -293,10 +293,37 @@ class CheckpointArtifact(MetaflowDataArtifactReference):
         "pathspec": str,
         "attempt": int,
         "metadata": dict,
+        "internal_metadata": dict,
         "name": str,
         "version_id": str,
         "storage_format": str,
     }
+
+    @property
+    def metadata(self):
+        _meta = self._values.get("metadata")
+        if not _meta:
+            return _meta
+        # Strip the internal key from legacy records where it leaked into metadata
+        if "_implicit_manifest" in _meta:
+            _meta = {k: v for k, v in _meta.items() if k != "_implicit_manifest"}
+            return _meta or {}
+        return _meta
+
+    @property
+    def implicit_manifest(self):
+        """
+        Returns the implicit checkpoint manifest (field names, formats, filenames).
+
+        Reads from ``internal_metadata`` for checkpoints saved after this fix,
+        and falls back to ``metadata["_implicit_manifest"]`` for older records.
+        """
+        _internal = self._values.get("internal_metadata")
+        if _internal is not None:
+            return _internal
+        # Backward-compat: old records stored the manifest inside metadata
+        _meta = self._values.get("metadata") or {}
+        return _meta.get("_implicit_manifest")
 
     @property
     def storage_format(self):

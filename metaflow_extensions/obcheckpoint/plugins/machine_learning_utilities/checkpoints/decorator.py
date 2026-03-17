@@ -10,7 +10,6 @@ from .cards import create_checkpoint_card, null_card
 from .lineage import checkpoint_load_related_metadata, trace_lineage
 from .constructors import (
     DEFAULT_NAME,
-    load_checkpoint,
     _instantiate_checkpoint_for_writes,
 )
 from .core import (
@@ -36,8 +35,6 @@ from metaflow.flowspec import INTERNAL_ARTIFACTS_SET
 from .final_api import Checkpoint
 from typing import List, Dict, Union, Tuple, Optional, Callable, TYPE_CHECKING
 from functools import wraps, partial
-import tempfile
-import json
 
 if TYPE_CHECKING:
     import metaflow
@@ -112,10 +109,6 @@ class CurrentCheckpointer:
         return self._task_identifier
 
     @property
-    def directory(self):
-        return self._temp_chckpt_dir.name
-
-    @property
     def is_loaded(self):
         return self._loaded_checkpoint is not None
 
@@ -130,6 +123,8 @@ class CurrentCheckpointer:
         resolved_scope,
         logger,
         gang_scheduled_task=False,
+        exclude=None,  # Field names to skip when checkpointing; forwarded to each save() call.
+        include=None,  # Explicit field names to checkpoint; forwarded to each save() call.
         temp_dir_root=None,
     ) -> None:
         from metaflow import current
@@ -145,9 +140,6 @@ class CurrentCheckpointer:
         if temp_dir_root is not None:
             if not os.path.exists(temp_dir_root):
                 os.makedirs(temp_dir_root, exist_ok=True)
-        self._temp_chckpt_dir = tempfile.TemporaryDirectory(
-            prefix="metaflow_checkpoint_", dir=self._temp_dir_root
-        )
         self._task_identifier = task_identifier
         self._default_checkpointer = _instantiate_checkpoint_for_writes(
             Checkpoint(),
@@ -157,8 +149,8 @@ class CurrentCheckpointer:
             gang_scheduled_task=gang_scheduled_task,
         )
         self._flow = flow
-        self._flow_name = flow.name
-        self._resolved_scope = resolved_scope
+        self._exclude = exclude
+        self._include = include
         os.environ[CHECKPOINT_TASK_IDENTIFIER_ENV_VAR_NAME] = self._task_identifier
         os.environ[CHECKPOINT_UID_ENV_VAR_NAME] = str(
             self._default_checkpointer._checkpointer._checkpoint_uid
@@ -179,8 +171,10 @@ class CurrentCheckpointer:
         if checkpoint is None:
             return None
 
+        # Detection and loading are now separate steps; the checkpoint is stored here but only
+        # downloaded when the user explicitly calls current.checkpoint.load().
         warning_message(
-            "Loading the following checkpoint:\n\t[pathspec] %s\n\t[key] %s\n\t[created on] %s\n\t[url] %s"
+            "Found checkpoint at task start (call current.checkpoint.load() to restore):\n\t[pathspec] %s\n\t[key] %s\n\t[created on] %s\n\t[url] %s"
             % (
                 checkpoint.pathspec,
                 checkpoint.key,
@@ -190,56 +184,54 @@ class CurrentCheckpointer:
             logger=self._logger,
             ts=False,
         )
-        load_checkpoint(checkpoint=checkpoint, local_path=self.directory)
         self._loaded_checkpoint = checkpoint
         return checkpoint
 
     def save(
         self,
-        path: Optional[Union[str, os.PathLike]] = None,
         name: Optional[str] = DEFAULT_NAME,
         metadata: Optional[Dict] = {},
         latest: bool = True,
         storage_format: str = DEFAULT_STORAGE_FORMAT,
     ):
         """
-        Saves the checkpoint to the datastore.
+        Serializes public attributes of the flow step into a checkpoint.
+
+        Automatically checkpoints public non-underscore, non-callable
+        attributes on ``self`` (the FlowSpec instance).  The set of fields
+        is controlled by the ``include`` or ``exclude`` parameter on the
+        ``@checkpoint`` decorator (they are mutually exclusive).
 
         Parameters
         ----------
-        path : Optional[Union[str, os.PathLike]], default: None
-            The path to save the checkpoint. Accepts a file path or a directory path.
-                - If a directory path is provided, all the contents within that directory will be saved.
-                When a checkpoint is reloaded during task retries, `the current.checkpoint.directory` will
-                contain the contents of this directory.
-                - If a file path is provided, the file will be directly saved to the datastore (with the same filename).
-                When the checkpoint is reloaded during task retries, the file with the same name will be available in the
-                `current.checkpoint.directory`.
-                - If no path is provided then the `current.checkpoint.directory` will be saved as the checkpoint.
-
-        name : Optional[str], default: "mfchckpt"
+        name : str, default: "mfchckpt"
             The name of the checkpoint.
 
-        metadata : Optional[Dict], default: {}
-            Any metadata that needs to be saved with the checkpoint.
+        metadata : dict, default: {}
+            User metadata to attach to the checkpoint.
 
         latest : bool, default: True
-            If True, the checkpoint will be marked as the latest checkpoint.
-            This helps determine if the checkpoint gets loaded when the task restarts.
+            Mark this checkpoint as the latest.
 
-        storage_format : str, default: files
-            If `tar`, the contents of the directory will be tarred before saving to the datastore.
-            If `files`, saves directory directly to the datastore.
+        storage_format : str, optional
+            If ``tar``, the checkpoint directory is tarred before uploading.
+            If ``files`` (default), files are uploaded directly.
 
+        Returns
+        -------
+        CheckpointArtifact
+            A typed checkpoint reference with ``.name``, ``.url``, ``.metadata``,
+            ``.key``, ``.pathspec``, ``.created_on``, and other fields.
         """
-        if path is None:
-            path = self.directory
         return self._default_checkpointer.save(
-            path=path,
+            flow=self._flow,
+            exclude=self._exclude,
+            include=self._include,
             name=name,
             metadata=metadata,
             latest=latest,
             storage_format=storage_format,
+            temp_dir_root=self._temp_dir_root,
         )
 
     def list(
@@ -248,7 +240,7 @@ class CurrentCheckpointer:
         task: Optional[Union[str, "metaflow.Task"]] = None,
         attempt: Optional[int] = None,
         full_namespace: bool = False,  # If True, list all checkpoints in the full namespace
-    ) -> List[Dict]:
+    ) -> List[CheckpointArtifact]:
         """
         lists the checkpoints in the current task or the specified task.
 
@@ -297,50 +289,77 @@ class CurrentCheckpointer:
 
         Returns
         -------
-        List[Dict]
+        List[CheckpointArtifact]
         """
+        # as_dict=False returns typed CheckpointArtifact objects instead of raw dicts.
         return self._default_checkpointer.list(
             name=name,
             task=task,
             attempt=attempt,
-            as_dict=True,
+            as_dict=False,
             full_namespace=full_namespace,
         )
 
-    def cleanup(self):
-        self._temp_chckpt_dir.cleanup()
-
-    def refresh_directory(self):
-        self.cleanup()
-        self._temp_chckpt_dir = tempfile.TemporaryDirectory(
-            prefix="metaflow_checkpoint_", dir=self._temp_dir_root
-        )
-
-    def load(
+    def inspect(
         self,
-        reference: Union[str, Dict, CheckpointArtifact],
-        path: Optional[str] = None,
-    ):
+        reference: Optional[Union[str, Dict, CheckpointArtifact]] = None,
+    ) -> Optional[Dict]:
         """
-        loads a checkpoint reference from the datastore. (resembles a read op)
-
-        This can have two meanings:
-            - If the path is provided, it will load the checkpoint in the provided path
-            - If no path is provided, it will load the checkpoint in the default directory
+        Returns the implicit checkpoint manifest without downloading checkpoint files.
 
         Parameters
         ----------
+        reference : str, dict, CheckpointArtifact, or None
+            The checkpoint to inspect.  When ``None``, uses the checkpoint
+            detected at task start (``is_loaded`` must be ``True``).
 
-        `reference` :
-            - can be a string, dict or a CheckpointArtifact object:
-                - string: a string reference to the checkpoint
-                - dict: a dictionary form of the CheckpointArtifact
-                - CheckpointArtifact: a CheckpointArtifact object reference to the checkpoint
+        Returns
+        -------
+        dict or None
+            The implicit manifest (``{"version": 1, "fields": {...}}``), or
+            ``None`` if the checkpoint was not saved in implicit mode.
         """
-        if path is None:
-            self.refresh_directory()
-            path = self.directory
-        return Checkpoint().load(reference, path=path)
+        if reference is None:
+            if not self.is_loaded:
+                raise CheckpointException(
+                    "current.checkpoint.inspect() was called without a reference "
+                    "but no checkpoint was detected at task start (is_loaded is False)."
+                )
+            reference = self._loaded_checkpoint
+        return Checkpoint.inspect(reference)
+
+    def load(
+        self,
+        reference: Optional[Union[str, Dict, CheckpointArtifact]] = None,
+    ):
+        """
+        Loads a checkpoint and deserializes its fields back onto the flow.
+
+        When called without a *reference*, uses the checkpoint detected at task
+        start (``is_loaded`` must be ``True``).  When called with a *reference*,
+        loads that specific checkpoint.
+
+        Parameters
+        ----------
+        reference : str, dict, CheckpointArtifact, or None
+            - ``None``: use the checkpoint detected at task start.
+            - string: a checkpoint key string.
+            - dict: a dictionary form of a CheckpointArtifact.
+            - CheckpointArtifact: a CheckpointArtifact reference.
+        """
+        # Default to the checkpoint detected at task start so callers don't need to pass it explicitly.
+        if reference is None:
+            if not self.is_loaded:
+                raise CheckpointException(
+                    "current.checkpoint.load() was called without a reference but no "
+                    "checkpoint was detected at task start (is_loaded is False). "
+                    "Either pass an explicit reference or ensure a previous attempt "
+                    "saved a checkpoint."
+                )
+            reference = self._loaded_checkpoint
+        self._default_checkpointer.load(
+            reference=reference, flow=self._flow, temp_dir_root=self._temp_dir_root
+        )
 
 
 def merge_dicts_with_precedence(*args: dict) -> dict:
@@ -401,22 +420,18 @@ class CheckpointDecorator(StepDecorator):
     @checkpoint
     @step
     def train(self):
-        model = create_model(self.parameters, checkpoint_path = None)
+        model = create_model(self.parameters)
         for i in range(self.epochs):
             # some training logic
             loss = model.train(self.dataset)
+            self.model = model
+            self.epoch = i
+            self.loss = loss
             if i % 10 == 0:
-                model.save(
-                    current.checkpoint.directory,
-                )
-                # saves the contents of the `current.checkpoint.directory` as a checkpoint
-                # and returns a reference dictionary to the checkpoint saved in the datastore
+                # saves all public attributes of self as a checkpoint
                 self.latest_checkpoint = current.checkpoint.save(
                     name="epoch_checkpoint",
-                    metadata={
-                        "epoch": i,
-                        "loss": loss,
-                    }
+                    metadata={"epoch": i, "loss": loss},
                 )
     ```
 
@@ -427,15 +442,12 @@ class CheckpointDecorator(StepDecorator):
     @checkpoint
     @step
     def train(self):
-        # Assume that the task has restarted and the previous attempt of the task
-        # saved a checkpoint
-        checkpoint_path = None
-        if current.checkpoint.is_loaded: # Check if a checkpoint is loaded
-            print("Loaded checkpoint from the previous attempt")
-            checkpoint_path = current.checkpoint.directory
+        if current.checkpoint.is_loaded:
+            print("Restoring from checkpoint")
+            current.checkpoint.load()  # deserializes fields back onto self
 
-        model = create_model(self.parameters, checkpoint_path = checkpoint_path)
-        for i in range(self.epochs):
+        model = create_model(self.parameters)
+        for i in range(self.epoch, self.epochs):
             ...
     ```
 
@@ -452,9 +464,16 @@ class CheckpointDecorator(StepDecorator):
             With this mode, no checkpoint will be loaded at the start of a task but any checkpoints
             created within the task will be loaded when the task is retries execution on failure.
 
-    temp_dir_root : str, default: None
-        The root directory under which `current.checkpoint.directory` will be created.
+    exclude : list of str, default: None
+        Attribute names to skip when checkpointing.  All other public
+        non-underscore, non-callable attributes on ``self`` are saved.
+        Cannot be specified together with ``include``.
 
+    include : list of str, default: None
+        Explicit list of attribute names to checkpoint.  Only these fields
+        are saved; all others are ignored.  Raises ``ValueError`` at save
+        time if any name is not present on ``self``.
+        Cannot be specified together with ``exclude``.
 
     MF Add To Current
     -----------------
@@ -463,8 +482,7 @@ class CheckpointDecorator(StepDecorator):
         The object exposes `save`/`load`/`list` methods for saving/loading checkpoints.
 
         You can check if a checkpoint is loaded by `current.checkpoint.is_loaded` and get the checkpoint information
-        by using `current.checkpoint.info`. The `current.checkpoint.directory` returns the path to the checkpoint directory
-        where the checkpoint maybe loaded or saved.
+        by using `current.checkpoint.info`.
 
         @@ Returns
         ----------
@@ -479,8 +497,14 @@ class CheckpointDecorator(StepDecorator):
     defaults = {
         # `load_policy` defines the policy for the checkpoint loading during the execution of different runs.
         # It can be : ["eager", "none", "fresh"],
-        "load_policy": "fresh",  #
-        "temp_dir_root": None,  # Root directory for the temporary checkpoint directory.
+        "load_policy": "fresh",
+        # `temp_dir_root` controls where OS temporary directories are created during save/load.
+        "temp_dir_root": None,
+        # `exclude` skips the listed field names; mutually exclusive with `include`.
+        "exclude": None,
+        # `include` checkpoints only the listed field names; mutually exclusive with `exclude`.
+        "include": None,
+
     }
 
     LOAD_POLCIES = [
@@ -536,7 +560,6 @@ class CheckpointDecorator(StepDecorator):
 
         if self._chkptr is not None:
             _store_checkpoint_ref_as_data_artifact(flow, retry_count, self._chkptr)
-            self._chkptr.cleanup()
             self._chkptr = None
 
     def task_pre_step(
@@ -641,7 +664,6 @@ class CheckpointDecorator(StepDecorator):
         )
 
         def _wrapped_step_func(_collector_thread, *args, **kwargs):
-
             _collector_thread.start()
             try:
                 return step_func(*args, **kwargs)
@@ -658,7 +680,6 @@ class CheckpointDecorator(StepDecorator):
 
         if self._chkptr is not None:
             _store_checkpoint_ref_as_data_artifact(flow, retry_count, self._chkptr)
-            self._chkptr.cleanup()
             self._chkptr = None
 
     def _resolve_scope(self):
@@ -695,6 +716,8 @@ class CheckpointDecorator(StepDecorator):
             resolved_scope=resolved_scope,
             logger=self._logger,
             gang_scheduled_task=gang_scheduled_task,
+            exclude=self.attributes.get("exclude"),
+            include=self.attributes.get("include"),
             temp_dir_root=temp_dir_root,
         )
         return self._chkptr._setup_task_first_load(load_policy, flow)
