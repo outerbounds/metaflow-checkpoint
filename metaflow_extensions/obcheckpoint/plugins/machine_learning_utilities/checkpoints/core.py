@@ -114,6 +114,7 @@ class Checkpointer:
         self,
         path: str,
         metadata={},
+        internal_metadata=None,
         latest=True,
         name=DEFAULT_NAME,
         storage_format=DEFAULT_STORAGE_FORMAT,
@@ -124,6 +125,7 @@ class Checkpointer:
             version_id=self._current_version,
             name=name,
             metadata=metadata,
+            internal_metadata=internal_metadata,
             set_latest=latest,
             storage_format=storage_format,
         )

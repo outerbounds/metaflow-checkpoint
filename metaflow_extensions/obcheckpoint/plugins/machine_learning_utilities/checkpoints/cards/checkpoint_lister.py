@@ -246,7 +246,6 @@ class CheckpointListRefresher(CardRefresher):
         "Created On",
         "Size",
         "Metadata",
-        # "Key",
     ]
 
     def __init__(
@@ -301,16 +300,14 @@ class CheckpointListRefresher(CardRefresher):
         return x
 
     def _footer_components(self):
-        if not self._loaded_checkpoint:
+        # Show placeholder text when lineage is empty rather than rendering a header-only empty table.
+        lineage_table = construct_lineage_table(self._lineage_stack)
+        if lineage_table is None:
             return [
                 Markdown("## Lineage of Loaded Checkpoint"),
-                Markdown(
-                    "_no lineage found_",
-                ),
+                Markdown("_no lineage found_"),
             ]
-        lineage_md = Markdown("## Lineage of Loaded Checkpoint")
-        lineage_table = construct_lineage_table(self._lineage_stack)
-        return [lineage_md, lineage_table]
+        return [Markdown("## Lineage of Loaded Checkpoint"), lineage_table]
 
     def on_startup(self, current_card):
         current_card.extend(self._header_components())
@@ -320,6 +317,8 @@ class CheckpointListRefresher(CardRefresher):
     def first_time_render(self, current_card, data_object, force_refresh=False):
         current_card.clear()
         current_card.extend(self._header_components())
+        # Sort checkpoints by creation time so the table is always in chronological order.
+        data_object = sorted(data_object, key=lambda x: x["created_on"])
         keys_going_in_table = self._make_table_objects(data_object)
         if len(keys_going_in_table) == 0:
             current_card.extend(
@@ -360,12 +359,8 @@ class CheckpointListRefresher(CardRefresher):
             self._saved_checkpoints[_chckpt.key] = [
                 Markdown(str(_chckpt.name)),
                 Markdown(format_datetime(str(_chckpt.created_on))),
-                Markdown(
-                    _derive_appropriate_size(_chckpt.size),
-                ),
+                Markdown(_derive_appropriate_size(_chckpt.size)),
                 Artifact(_chckpt.metadata),
-                # Markdown("```json\n%s\n```" % json.dumps(_chckpt.metadata, indent=4)),
-                # Markdown(_chckpt.key),
             ]
             keys_going_in_table.append(_chckpt.key)
         return keys_going_in_table
@@ -413,7 +408,11 @@ class CheckpointsCollector(Thread):
         self._refresher = refresher
 
     def collect(self):
-        return list(self.current.checkpoint.list(attempt=self.current.retry_count))
+        # list() now returns CheckpointArtifact objects, so convert to dicts for the card renderer.
+        return [
+            c.to_dict()
+            for c in self.current.checkpoint.list(attempt=self.current.retry_count)
+        ]
 
     def final_update(self):
         current_card = self.current.card[self._refresher.CARD_ID]
