@@ -411,9 +411,17 @@ class CheckpointsCollector(Thread):
         self._interval = interval
         self._exit_event = Event()
         self._refresher = refresher
+        self._seen_keys: set = set()
 
     def collect(self):
         return list(self.current.checkpoint.list(attempt=self.current.retry_count))
+
+    def _new_checkpoints(self, data):
+        """Return only checkpoints whose keys have not been seen in a prior cycle."""
+        new = [c for c in data if c.get("key") not in self._seen_keys]
+        for c in new:
+            self._seen_keys.add(c.get("key"))
+        return new
 
     def final_update(self):
         current_card = self.current.card[self._refresher.CARD_ID]
@@ -426,6 +434,10 @@ class CheckpointsCollector(Thread):
         current_card = self.current.card[self._refresher.CARD_ID]
         data = self.collect()
         if len(data) == 0:
+            return
+        new = self._new_checkpoints(data)
+        if not new:
+            # Nothing has changed since the last cycle; skip the card refresh.
             return
         self._refresher.on_update(current_card, data)
 

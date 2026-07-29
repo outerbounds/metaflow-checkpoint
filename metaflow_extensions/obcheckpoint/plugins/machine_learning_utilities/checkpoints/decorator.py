@@ -455,6 +455,14 @@ class CheckpointDecorator(StepDecorator):
     temp_dir_root : str, default: None
         The root directory under which `current.checkpoint.directory` will be created.
 
+    enable_cards : bool, default: True
+        Whether to run the automatic checkpoint-card background collector.
+        The collector polls S3 every few seconds to refresh the Outerbounds UI card
+        with checkpoint metadata. For long-running distributed training jobs this
+        can degrade throughput, particularly because each distributed rank starts
+        its own independent collector. Set to False to disable the collector entirely
+        while preserving all checkpoint save/load/list functionality.
+
 
     MF Add To Current
     -----------------
@@ -481,6 +489,10 @@ class CheckpointDecorator(StepDecorator):
         # It can be : ["eager", "none", "fresh"],
         "load_policy": "fresh",  #
         "temp_dir_root": None,  # Root directory for the temporary checkpoint directory.
+        # `enable_cards` controls whether the automatic checkpoint-card collector runs.
+        # Set to False for long-running distributed training jobs to prevent the background
+        # collector from polling S3 continuously and degrading training throughput.
+        "enable_cards": True,
     }
 
     LOAD_POLCIES = [
@@ -507,6 +519,11 @@ class CheckpointDecorator(StepDecorator):
             raise CheckpointException(
                 "`load_policy` of %s is not supported. Supported policies are %s"
                 % (self.attributes["load_policy"], ", ".join(self.LOAD_POLCIES))
+            )
+        if not isinstance(self.attributes.get("enable_cards", True), bool):
+            raise CheckpointException(
+                "`enable_cards` must be a boolean, got %s"
+                % type(self.attributes["enable_cards"])
             )
 
         # We add to INTERNAL_ARTIFACTS_SET here because the decorator adds internal artifacts to the
@@ -615,6 +632,7 @@ class CheckpointDecorator(StepDecorator):
             gang_scheduled_task=gang_scheduled_task,
             temp_dir_root=temp_dir_root,
         )
+        self._gang_scheduled_task = gang_scheduled_task
         self._loaded_checkpoint_lineage = []
         if self._loaded_checkpoint is not None:
             entries = checkpoint_load_related_metadata(
@@ -629,6 +647,26 @@ class CheckpointDecorator(StepDecorator):
     def task_decorate(
         self, step_func, flow, graph, retry_count, max_user_code_retries, ubf_context
     ):
+        from metaflow import current
+
+        # Respect the explicit opt-out.
+        enable_cards = self.attributes.get("enable_cards", True)
+
+        # For gang-scheduled (DDP) steps every rank runs its own process, so without
+        # this guard each rank would independently start a collector that polls the
+        # same shared S3 checkpoint prefix every few seconds. That multiplies remote
+        # I/O by the number of ranks and causes persistent training-throughput
+        # degradation as checkpoints accumulate. Only the control task (node_index 0)
+        # needs to update the UI card; worker ranks gain nothing from running a
+        # collector.
+        is_gang = getattr(self, "_gang_scheduled_task", False)
+        is_control_task = not is_gang or (
+            getattr(current.parallel, "node_index", 0) == 0
+        )
+
+        if not enable_cards or not is_control_task:
+            return step_func
+
         # Wrap the step_func in a function that will write to current.card["checkpoint_info"] the lineage card
         # and then call the step_func.
         self._collector_thread = CheckpointsCollector(
