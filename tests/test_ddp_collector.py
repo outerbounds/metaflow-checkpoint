@@ -77,7 +77,7 @@ class TestTaskDecorateCollectorGuard:
     Source: decorator.py :: CheckpointDecorator.task_decorate
     """
 
-    def test_non_gang_enable_cards_true_starts_collector(self):
+    def test_non_gang_show_card_true_starts_collector(self):
         """Single-GPU step with show_card=True: collector must start."""
         assert _should_start_collector(show_card=True, gang_scheduled=False, node_index=0) is True
 
@@ -97,15 +97,15 @@ class TestTaskDecorateCollectorGuard:
         """DDP worker (rank 3): collector must NOT start."""
         assert _should_start_collector(show_card=True, gang_scheduled=True, node_index=3) is False
 
-    def test_enable_cards_false_non_gang_skips_collector(self):
+    def test_show_card_false_non_gang_skips_collector(self):
         """show_card=False on a single-GPU step: collector must NOT start."""
         assert _should_start_collector(show_card=False, gang_scheduled=False, node_index=0) is False
 
-    def test_enable_cards_false_gang_rank0_skips_collector(self):
+    def test_show_card_false_gang_rank0_skips_collector(self):
         """show_card=False on the control task: collector must NOT start."""
         assert _should_start_collector(show_card=False, gang_scheduled=True, node_index=0) is False
 
-    def test_enable_cards_false_gang_worker_skips_collector(self):
+    def test_show_card_false_gang_worker_skips_collector(self):
         """show_card=False on a worker rank: collector must NOT start."""
         assert _should_start_collector(show_card=False, gang_scheduled=True, node_index=2) is False
 
