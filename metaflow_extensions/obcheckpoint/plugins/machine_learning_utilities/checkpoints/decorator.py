@@ -455,6 +455,8 @@ class CheckpointDecorator(StepDecorator):
     temp_dir_root : str, default: None
         The root directory under which `current.checkpoint.directory` will be created.
 
+    show_card : bool, default: True
+        appends an [@card decorator](https://docs.metaflow.org/metaflow/visualizing-results) that surfaces information about checkpoints created during the task. For @parallel tasks the card only surfaces checkpoint information about the control task. When to False no checkpoint related @card decorator is appended. 
 
     MF Add To Current
     -----------------
@@ -479,8 +481,8 @@ class CheckpointDecorator(StepDecorator):
     defaults = {
         # `load_policy` defines the policy for the checkpoint loading during the execution of different runs.
         # It can be : ["eager", "none", "fresh"],
-        "load_policy": "fresh",  #
-        "temp_dir_root": None,  # Root directory for the temporary checkpoint directory.
+        # `show_card` controls whether checkpoint @card is appended.
+        "show_card": True,
     }
 
     LOAD_POLCIES = [
@@ -507,6 +509,11 @@ class CheckpointDecorator(StepDecorator):
             raise CheckpointException(
                 "`load_policy` of %s is not supported. Supported policies are %s"
                 % (self.attributes["load_policy"], ", ".join(self.LOAD_POLCIES))
+            )
+        if not isinstance(self.attributes.get("show_card", True), bool):
+            raise CheckpointException(
+                "`show_card` must be a boolean, got %s"
+                % type(self.attributes["show_card"])
             )
 
         # We add to INTERNAL_ARTIFACTS_SET here because the decorator adds internal artifacts to the
@@ -615,6 +622,7 @@ class CheckpointDecorator(StepDecorator):
             gang_scheduled_task=gang_scheduled_task,
             temp_dir_root=temp_dir_root,
         )
+        self._gang_scheduled_task = gang_scheduled_task
         self._loaded_checkpoint_lineage = []
         if self._loaded_checkpoint is not None:
             entries = checkpoint_load_related_metadata(
@@ -629,6 +637,26 @@ class CheckpointDecorator(StepDecorator):
     def task_decorate(
         self, step_func, flow, graph, retry_count, max_user_code_retries, ubf_context
     ):
+        from metaflow import current
+
+        # Respect the explicit opt-out.
+        show_card = self.attributes.get("show_card", True)
+
+        # For gang-scheduled (DDP) steps every rank runs its own process, so without
+        # this guard each rank would independently start a collector that polls the
+        # same shared S3 checkpoint prefix every few seconds. That multiplies remote
+        # I/O by the number of ranks and causes persistent training-throughput
+        # degradation as checkpoints accumulate. Only the control task (node_index 0)
+        # needs to update the UI card; worker ranks gain nothing from running a
+        # collector.
+        is_gang = getattr(self, "_gang_scheduled_task", False)
+        is_control_task = not is_gang or (
+            getattr(current.parallel, "node_index", 0) == 0
+        )
+
+        if not show_card or not is_control_task:
+            return step_func
+
         # Wrap the step_func in a function that will write to current.card["checkpoint_info"] the lineage card
         # and then call the step_func.
         self._collector_thread = CheckpointsCollector(

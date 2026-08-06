@@ -51,3 +51,6 @@ examples/real-examples/mnist_torch_vanilla/model_checkpoints/*
 examples/real-examples/mnist_torch_vanilla/model_checkpoints_*/*
 examples/real-examples/mnist_torch_vanilla/MNIST/*
 examples/real-examples/mnist_torch_vanilla/checkpoint_downloads/*
+
+# local test virtualenv
+.test-venv/
