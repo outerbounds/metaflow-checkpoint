@@ -455,13 +455,6 @@ class CheckpointDecorator(StepDecorator):
     temp_dir_root : str, default: None
         The root directory under which `current.checkpoint.directory` will be created.
 
-    enable_cards : bool, default: True
-        Whether to run the automatic checkpoint-card background collector.
-        The collector polls S3 every few seconds to refresh the Outerbounds UI card
-        with checkpoint metadata. For long-running distributed training jobs this
-        can degrade throughput, particularly because each distributed rank starts
-        its own independent collector. Set to False to disable the collector entirely
-        while preserving all checkpoint save/load/list functionality.
     show_card : bool, default: True
         appends an [@card decorator](https://docs.metaflow.org/metaflow/visualizing-results) that surfaces information about checkpoints created during the task. For @parallel tasks the card only surfaces checkpoint information about the control task. When to False no checkpoint related @card decorator is appended. 
 
@@ -517,10 +510,10 @@ class CheckpointDecorator(StepDecorator):
                 "`load_policy` of %s is not supported. Supported policies are %s"
                 % (self.attributes["load_policy"], ", ".join(self.LOAD_POLCIES))
             )
-        if not isinstance(self.attributes.get("enable_cards", True), bool):
+        if not isinstance(self.attributes.get("show_card", True), bool):
             raise CheckpointException(
-                "`enable_cards` must be a boolean, got %s"
-                % type(self.attributes["enable_cards"])
+                "`show_card` must be a boolean, got %s"
+                % type(self.attributes["show_card"])
             )
 
         # We add to INTERNAL_ARTIFACTS_SET here because the decorator adds internal artifacts to the
@@ -647,7 +640,7 @@ class CheckpointDecorator(StepDecorator):
         from metaflow import current
 
         # Respect the explicit opt-out.
-        enable_cards = self.attributes.get("enable_cards", True)
+        show_card = self.attributes.get("show_card", True)
 
         # For gang-scheduled (DDP) steps every rank runs its own process, so without
         # this guard each rank would independently start a collector that polls the
@@ -661,7 +654,7 @@ class CheckpointDecorator(StepDecorator):
             getattr(current.parallel, "node_index", 0) == 0
         )
 
-        if not enable_cards or not is_control_task:
+        if not show_card or not is_control_task:
             return step_func
 
         # Wrap the step_func in a function that will write to current.card["checkpoint_info"] the lineage card
