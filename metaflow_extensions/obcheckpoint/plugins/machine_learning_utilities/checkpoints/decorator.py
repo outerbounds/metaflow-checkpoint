@@ -490,8 +490,6 @@ class CheckpointDecorator(StepDecorator):
         "load_policy": "fresh",  #
         "temp_dir_root": None,  # Root directory for the temporary checkpoint directory.
         # `enable_cards` controls whether the automatic checkpoint-card collector runs.
-        # Set to False for long-running distributed training jobs to prevent the background
-        # collector from polling S3 continuously and degrading training throughput.
         "enable_cards": True,
     }
 
