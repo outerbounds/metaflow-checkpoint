@@ -462,7 +462,8 @@ class CheckpointDecorator(StepDecorator):
         can degrade throughput, particularly because each distributed rank starts
         its own independent collector. Set to False to disable the collector entirely
         while preserving all checkpoint save/load/list functionality.
-
+    show_card : bool, default: True
+        appends an [@card decorator](https://docs.metaflow.org/metaflow/visualizing-results) that surfaces information about checkpoints created during the task. For @parallel tasks the card only surfaces checkpoint information about the control task. When to False no checkpoint related @card decorator is appended. 
 
     MF Add To Current
     -----------------
