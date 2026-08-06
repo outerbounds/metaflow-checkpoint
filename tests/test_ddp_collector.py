@@ -20,7 +20,7 @@ from unittest.mock import MagicMock, patch
 # (decorator.py :: CheckpointDecorator.task_decorate)
 # ---------------------------------------------------------------------------
 
-def _should_start_collector(enable_cards: bool, gang_scheduled: bool, node_index: int) -> bool:
+def _should_start_collector(show_card: bool, gang_scheduled: bool, node_index: int) -> bool:
     """
     Pure function replica of the guard logic added to task_decorate.
 
@@ -28,7 +28,7 @@ def _should_start_collector(enable_cards: bool, gang_scheduled: bool, node_index
     Returns False → collector should NOT start (step func returned unchanged).
     """
     is_control_task = not gang_scheduled or (node_index == 0)
-    return enable_cards and is_control_task
+    return show_card and is_control_task
 
 
 # ---------------------------------------------------------------------------
@@ -78,36 +78,36 @@ class TestTaskDecorateCollectorGuard:
     """
 
     def test_non_gang_enable_cards_true_starts_collector(self):
-        """Single-GPU step with enable_cards=True: collector must start."""
-        assert _should_start_collector(enable_cards=True, gang_scheduled=False, node_index=0) is True
+        """Single-GPU step with show_card=True: collector must start."""
+        assert _should_start_collector(show_card=True, gang_scheduled=False, node_index=0) is True
 
     def test_gang_rank0_starts_collector(self):
-        """DDP control task (rank 0) with enable_cards=True: collector must start."""
-        assert _should_start_collector(enable_cards=True, gang_scheduled=True, node_index=0) is True
+        """DDP control task (rank 0) with show_card=True: collector must start."""
+        assert _should_start_collector(show_card=True, gang_scheduled=True, node_index=0) is True
 
     def test_gang_rank1_skips_collector(self):
         """DDP worker (rank 1): collector must NOT start."""
-        assert _should_start_collector(enable_cards=True, gang_scheduled=True, node_index=1) is False
+        assert _should_start_collector(show_card=True, gang_scheduled=True, node_index=1) is False
 
     def test_gang_rank2_skips_collector(self):
         """DDP worker (rank 2): collector must NOT start."""
-        assert _should_start_collector(enable_cards=True, gang_scheduled=True, node_index=2) is False
+        assert _should_start_collector(show_card=True, gang_scheduled=True, node_index=2) is False
 
     def test_gang_rank3_skips_collector(self):
         """DDP worker (rank 3): collector must NOT start."""
-        assert _should_start_collector(enable_cards=True, gang_scheduled=True, node_index=3) is False
+        assert _should_start_collector(show_card=True, gang_scheduled=True, node_index=3) is False
 
     def test_enable_cards_false_non_gang_skips_collector(self):
-        """enable_cards=False on a single-GPU step: collector must NOT start."""
-        assert _should_start_collector(enable_cards=False, gang_scheduled=False, node_index=0) is False
+        """show_card=False on a single-GPU step: collector must NOT start."""
+        assert _should_start_collector(show_card=False, gang_scheduled=False, node_index=0) is False
 
     def test_enable_cards_false_gang_rank0_skips_collector(self):
-        """enable_cards=False on the control task: collector must NOT start."""
-        assert _should_start_collector(enable_cards=False, gang_scheduled=True, node_index=0) is False
+        """show_card=False on the control task: collector must NOT start."""
+        assert _should_start_collector(show_card=False, gang_scheduled=True, node_index=0) is False
 
     def test_enable_cards_false_gang_worker_skips_collector(self):
-        """enable_cards=False on a worker rank: collector must NOT start."""
-        assert _should_start_collector(enable_cards=False, gang_scheduled=True, node_index=2) is False
+        """show_card=False on a worker rank: collector must NOT start."""
+        assert _should_start_collector(show_card=False, gang_scheduled=True, node_index=2) is False
 
 
 # ---------------------------------------------------------------------------
@@ -179,12 +179,12 @@ class TestCheckpointsCollectorCaching:
 
 
 # ---------------------------------------------------------------------------
-# Tests: decorator.py — enable_cards validation
+# Tests: decorator.py — show_card validation
 # ---------------------------------------------------------------------------
 
 class TestEnableCardsValidation:
     """
-    Verifies that non-boolean values for enable_cards are caught.
+    Verifies that non-boolean values for show_card are caught.
 
     Source: decorator.py :: CheckpointDecorator.step_init
     """
@@ -192,7 +192,7 @@ class TestEnableCardsValidation:
     def _check(self, value):
         if not isinstance(value, bool):
             raise ValueError(
-                "`enable_cards` must be a boolean, got %s" % type(value)
+                "`show_card` must be a boolean, got %s" % type(value)
             )
 
     def test_true_is_valid(self):
@@ -203,15 +203,15 @@ class TestEnableCardsValidation:
 
     def test_string_raises(self):
         import pytest
-        with pytest.raises(ValueError, match="enable_cards"):
+        with pytest.raises(ValueError, match="show_card"):
             self._check("yes")
 
     def test_none_raises(self):
         import pytest
-        with pytest.raises(ValueError, match="enable_cards"):
+        with pytest.raises(ValueError, match="show_card"):
             self._check(None)
 
     def test_int_raises(self):
         import pytest
-        with pytest.raises(ValueError, match="enable_cards"):
+        with pytest.raises(ValueError, match="show_card"):
             self._check(1)
