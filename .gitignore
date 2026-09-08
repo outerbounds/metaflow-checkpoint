@@ -7,6 +7,7 @@ __pycache__/
 
 build/
 dist/
+conda-dist/
 *.egg-info/
 
 .tox/
