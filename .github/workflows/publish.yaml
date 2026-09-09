@@ -34,5 +34,6 @@ jobs:
       with:
         packages-dir: ./dist
     - name: Publish conda package
+      shell: bash -el {0}
       run: |
         anaconda --token ${{ secrets.ANACONDA_REPO_TOKEN }} upload --user outerbounds --label main --skip-existing conda-dist/noarch/metaflow-checkpoint-*
