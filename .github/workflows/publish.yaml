@@ -21,13 +21,14 @@ jobs:
       run: |
         python3 setup.py sdist bdist_wheel --universal
     - name: Set up Conda
-      uses: conda-incubator/setup-miniconda@v3
+      uses: conda-incubator/setup-miniconda@8ee1f361103df19b6f8c8655fd3967a8ecb162d5 # v4.0.1
       with:
         miniforge-version: latest
     - name: Build conda package
+      shell: bash -el {0}
       run: |
         conda install -y conda-build anaconda-client
-        conda build --output-folder conda-dist conda
+        conda build --output-folder conda-dist conda/
     - name: Publish pypi package
       uses: pypa/gh-action-pypi-publish@release/v1
       with:
