@@ -24,6 +24,7 @@ jobs:
       uses: conda-incubator/setup-miniconda@8ee1f361103df19b6f8c8655fd3967a8ecb162d5 # v4.0.1
       with:
         miniforge-version: latest
+        activate-environment: ""
     - name: Build conda package
       shell: bash -el {0}
       run: |
