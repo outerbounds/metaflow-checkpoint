@@ -1,4 +1,4 @@
-name: Publish metaflow-checkpoint to pypi (Manual)
+name: Publish metaflow-checkpoint to pypi and anaconda (Manual)
 on:
   workflow_dispatch:
 jobs:
@@ -20,7 +20,21 @@ jobs:
     - name: Build package
       run: |
         python3 setup.py sdist bdist_wheel --universal
-    - name: Publish package
+    - name: Set up Conda
+      uses: conda-incubator/setup-miniconda@8ee1f361103df19b6f8c8655fd3967a8ecb162d5 # v4.0.1
+      with:
+        miniforge-version: latest
+        activate-environment: ""
+    - name: Build conda package
+      shell: bash -el {0}
+      run: |
+        conda install -y conda-build anaconda-client
+        conda build --output-folder conda-dist conda/
+    - name: Publish pypi package
       uses: pypa/gh-action-pypi-publish@release/v1
       with:
         packages-dir: ./dist
+    - name: Publish conda package
+      shell: bash -el {0}
+      run: |
+        anaconda --token ${{ secrets.ANACONDA_REPO_TOKEN }} upload --user outerbounds --label main --skip-existing conda-dist/noarch/metaflow-checkpoint-*

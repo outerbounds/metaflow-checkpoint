@@ -1,0 +1,33 @@
+{% set version = load_file_regex(load_file="../metaflow_extensions/obcheckpoint/toplevel/version.py", from_recipe_dir=True, regex_pattern='package_version\s*=\s*"([^"]+)"')[1] %}
+
+package:
+  name: metaflow-checkpoint
+  version: {{ version }}
+
+source:
+  path: ..
+
+build:
+  noarch: python
+  script: {{ PYTHON }} -m pip install . --no-deps --no-build-isolation -vv
+
+requirements:
+  host:
+    - python >=3.7
+    - pip
+    - setuptools
+    - wheel
+  run:
+    - python >=3.7
+    - tqdm
+    - huggingface_hub
+
+test:
+  imports:
+    - metaflow_extensions.obcheckpoint.toplevel
+
+about:
+  home: https://github.com/outerbounds/metaflow-checkpoint
+  license: Apache-2.0
+  license_file: LICENSE
+  summary: An EXPERIMENTAL checkpoint decorator for Metaflow
